@@ -1,4 +1,5 @@
 import numpy as np
+import random
 
 
 class DataLoader:
@@ -16,15 +17,21 @@ class DataLoader:
         self.num_entity = 0
         self.num_relation = 0
 
-    def load_files(self):
+    def load_files(self, dataset):
         with open(self.entity_file) as f:
             for line in f:
-                entity, idx = line.strip('\n').split('\t')
+                if dataset == 'MetaQA':
+                    entity, idx = line.strip('\n').split('\t')
+                else:
+                    idx, entity = line.strip('\n').split('\t')
                 self.entity_to_idx[entity] = int(idx)
         self.num_entity = len(self.entity_to_idx)
         with open(self.relation_file) as f:
             for line in f:
-                relation, idx = line.strip('\n').split('\t')
+                if dataset == 'MetaQA':
+                    relation, idx = line.strip('\n').split('\t')
+                else:
+                    idx, relation = line.strip('\n').split('\t')
                 self.relation_to_idx[relation] = int(idx)
         self.num_relation = len(self.relation_to_idx)
         with open(self.train_file) as f:
@@ -64,6 +71,21 @@ class DataLoader:
             # elif purpose == 'valid':
             #     yield np.array(positive_sample)
 
+    def negative_sample(self, purpose='train'):
+        length = len(self.data[purpose])
+        idx = 0
+        while idx < length:
+            next_idx = idx + self.batch_size if idx + self.batch_size < length else length
+            positive_sample = self.data[purpose][idx: next_idx]
+            negative_sample = []
+            for sample in positive_sample:
+                neg_sample = []
+                for i in range(self.negative_sample_size):
+                    neg_sample.append(
+                        [sample[0], sample[1], random.randint(0, len(self.entity_to_idx) - 1)])
+                negative_sample.append(neg_sample)
+            yield np.array(positive_sample), np.array(negative_sample)
+            idx = next_idx
 
 # if __name__ == '__main__':
 #     loader = DataLoader('../data/MetaQA')
