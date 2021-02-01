@@ -5,6 +5,7 @@ from openke.module.loss import SoftplusLoss, SigmoidLoss
 from openke.module.strategy import NegativeSampling
 from openke.data import TrainDataLoader, TestDataLoader
 import argparse
+import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--dataset", type=str, default="WN18")
@@ -15,7 +16,7 @@ parser.add_argument("--bern_flag", type=int, default=0)
 parser.add_argument("--filter_flag", type=int, default=1)
 parser.add_argument("--neg_ent", type=int, default=64)
 parser.add_argument("--neg_rel", type=int, default=0)
-parser.add_argument("--sampling_model", type=str, default="cross")
+parser.add_argument("--sampling_mode", type=str, default="cross")
 parser.add_argument("--lr", type=float, default=0.001)
 parser.add_argument("--model", type=str, default='rotateE')
 parser.add_argument("--embed_dim", type=int, default=256)
@@ -27,20 +28,21 @@ parser.add_argument("--opt_method", type=str, default="adam")
 parser.add_argument("--margin", type=float, default=6.0)
 parser.add_argument("--epsilon", type=float, default=2.0)
 parser.add_argument("--valid_step", type=int, default=10)
+parser.add_argument("--save_path", type=str, default="./checkpoint/model_{}.ckpt".format(time.ctime()))
 
 args = parser.parse_args()
 train_dataloader = TrainDataLoader(
-    in_path="./benchmarks/" + args.dataset + '/',
+    in_path="./data/" + args.dataset + '/',
     batch_size=args.batch_size,
     threads=args.nthreads,
-    sampling_mode=args.sampling_model,
+    sampling_mode=args.sampling_mode,
     bern_flag=args.bern_flag,
     filter_flag=args.filter_flag,
     neg_ent=args.neg_ent,
     neg_rel=args.neg_rel
 )
 
-test_dataloader = TestDataLoader("./benchmarks/" + args.dataset + '/', "link")
+test_dataloader = TestDataLoader("./data/" + args.dataset + '/', "link")
 embed_method = None
 if args.model == 'rotateE':
     embed_method = RotatE(
@@ -70,9 +72,9 @@ model = NegativeSampling(
 trainer = Trainer(model=model, data_loader=train_dataloader, train_times=args.EPOCH, valid_steps=args.valid_step,
                   alpha=args.alpha, use_gpu=args.cuda, opt_method=args.opt_method, test_data_loader=test_dataloader)
 trainer.run()
-embed_method.save_checkpoint('./checkpoint/simple.ckpt')
+embed_method.save_checkpoint(args.save_path)
 
 # test the model
-embed_method.load_checkpoint('./checkpoint/simple.ckpt')
+embed_method.load_checkpoint(args.save_path)
 tester = Tester(model=embed_method, data_loader=test_dataloader, use_gpu=args.cuda)
 tester.run_link_prediction(type_constrain=args.type_constrain)
