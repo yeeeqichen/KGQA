@@ -1,7 +1,4 @@
-/data/
+openke/
+model_Tue Jan 26 19_24_46 2021.ckpt
 test.py
-/openke/
-/benchmarks/
-/checkpoint/
-/embed模型/
-/bert_pretrain/
+MetaQA/

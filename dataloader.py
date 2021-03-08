@@ -1,21 +1,23 @@
-from pytorch_transformers import BertTokenizer
+from pytorch_transformers import RobertaTokenizer
 import re
 import tqdm
+BERT_PATH = "C:/Users/yeeeqichen/Desktop/语言模型/roberta-base"
 
 
 # train 一共96106句问答
 class DataLoader:
-    def __init__(self, train_file, valid_file, test_file, dict_path='./data/QA_data/MetaQA/entities.dict', batch_size=32, seq_length=20):
+    def __init__(self, train_file, valid_file, test_file, dict_path='./MetaQA/QA_data/entities.dict',
+                 batch_size=32, seq_length=20):
         self.batch_size = batch_size
         self.seq_length = seq_length
         self.ent_dict = {}
+        self.tokenizer = RobertaTokenizer.from_pretrained(BERT_PATH)
         print('reading entity dict...')
         with open(dict_path) as f:
             for line in f:
                 entity, entity_id = line.strip('\n').split('\t')
                 self.ent_dict[entity] = int(entity_id)
         print('there are {} entities'.format(len(self.ent_dict)))
-        self.tokenizer = BertTokenizer.from_pretrained('./bert_pretrain')
         self.train_corpus = self.read_file(train_file)
         self.total_train_instances = len(self.train_corpus)
         print('there are {} instances in {}'.format(self.total_train_instances, train_file))
@@ -60,7 +62,8 @@ class DataLoader:
 
 
 def test():
-    a = DataLoader('./data/QA_data/MetaQA/qa_train_1hop.txt', './data/QA_data/MetaQA/qa_dev_1hop.txt', './data/QA_data/MetaQA/qa_test_1hop.txt')
+    a = DataLoader('./MetaQA/QA_data/qa_train_1hop.txt', './MetaQA/QA_data/qa_dev_1hop.txt',
+                   './MetaQA/QA_data/qa_test_1hop.txt')
     for batch in a.train_batch_generator():
         print(batch)
         break
