@@ -1,14 +1,15 @@
 import torch
-import numpy
+import logging
 from openke.module.model import RotatE
 from pytorch_transformers import RobertaModel
 BERT_PATH = "C:/Users/yeeeqichen/Desktop/语言模型/roberta-base"
+logger = logging.getLogger(__name__)
 
 
 class RelationPredictor(torch.nn.Module):
     def __init__(self):
         super(RelationPredictor, self).__init__()
-        print('loading pretrained_model for fine-tuning...')
+        logger.info('loading pretrained bert model...')
         self.question_embed = RobertaModel.from_pretrained(BERT_PATH)
         for param in self.question_embed.parameters():
             param.requires_grad = True
@@ -19,7 +20,6 @@ class RelationPredictor(torch.nn.Module):
         self.relu = torch.nn.ReLU()
         self.dropout = torch.nn.Dropout(0.5)
 
-    # todo:这里直接预测relation的embedding，后续可能会改进
     def forward(self, question_token_ids, question_masks):
         question_embed = self.dropout(
             self.question_embed(input_ids=question_token_ids, attention_mask=question_masks)[1]
@@ -29,10 +29,10 @@ class RelationPredictor(torch.nn.Module):
 
 
 class QuestionAnswerModel(torch.nn.Module):
-    def __init__(self):
+    def __init__(self, embed_model_path):
         super(QuestionAnswerModel, self).__init__()
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        print('using device: {}'.format(self.device))
+        logger.info('using device: {}'.format(self.device))
         self.relation_predictor = RelationPredictor().to(self.device)
         self.KG_embed = RotatE(
             ent_tot=43234,
@@ -41,7 +41,9 @@ class QuestionAnswerModel(torch.nn.Module):
             margin=6.0,
             epsilon=2.0
         )
-        self.KG_embed.load_checkpoint('./model_Tue Jan 26 19_24_46 2021.ckpt')
+        self.embed_model_path = embed_model_path
+        logger.info('loading pretrained KG embedding from {}'.format(self.embed_model_path))
+        self.KG_embed.load_checkpoint(self.embed_model_path)
         self.KG_embed.to(self.device)
 
     def _to_tensor(self, inputs):
@@ -78,7 +80,6 @@ class QuestionAnswerModel(torch.nn.Module):
         score = torch.stack([re_score, im_score], dim=0)
         score = score.norm(dim=0).sum(dim=-1)
         # (batch_size, ent_tot)
-        # print(score)
         return score
         # pi = 3.1415926535
         # re_head, im_head = torch.chunk(head, 2, dim=1)
@@ -97,14 +98,15 @@ class QuestionAnswerModel(torch.nn.Module):
 
     def forward(self, question_token_ids, question_masks, head_id):
         rel_scores = self.relation_predictor(self._to_tensor(question_token_ids), self._to_tensor(question_masks))
-        print(rel_scores.shape)
+        # print(rel_scores.shape)
         rel_num = torch.max(rel_scores, 1, keepdim=True)
         predict_relation = torch.index_select(self.KG_embed.rel_embeddings.weight, 0, rel_num.indices.view(-1))
         head_embed = self.KG_embed.ent_embeddings(self._to_tensor(head_id)).squeeze(1)
         # print(head_embed.shape, predict_relation.shape)
         scores = self.rotateE(head_embed, predict_relation)
         # print(scores.shape)
-        return scores
+        func = torch.nn.Softmax(dim=1)
+        return func(scores)
 
 
 def test():

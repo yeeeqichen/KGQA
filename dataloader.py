@@ -1,48 +1,48 @@
 from pytorch_transformers import RobertaTokenizer
 import re
 import tqdm
+import logging
 BERT_PATH = "C:/Users/yeeeqichen/Desktop/语言模型/roberta-base"
-
+logger = logging.getLogger(__name__)
 
 # train 一共96106句问答
 class DataLoader:
-    def __init__(self, train_file, valid_file, test_file, dict_path='./MetaQA/QA_data/entities.dict',
+    def __init__(self, train_file, valid_file, test_file, dict_path,
                  batch_size=32, seq_length=20):
         self.batch_size = batch_size
         self.seq_length = seq_length
         self.ent_dict = {}
         self.tokenizer = RobertaTokenizer.from_pretrained(BERT_PATH)
-        print('reading entity dict...')
+        logger.info('reading entity dict...')
         with open(dict_path) as f:
             for line in f:
                 entity, entity_id = line.strip('\n').split('\t')
                 self.ent_dict[entity] = int(entity_id)
-        print('there are {} entities'.format(len(self.ent_dict)))
+        logger.info('there are {} entities'.format(len(self.ent_dict)))
         self.train_corpus = self.read_file(train_file)
         self.total_train_instances = len(self.train_corpus)
-        print('there are {} instances in {}'.format(self.total_train_instances, train_file))
+        logger.info('there are {} instances in {}'.format(self.total_train_instances, train_file))
         self.valid_corpus = self.read_file(valid_file)
         self.total_valid_instances = len(self.valid_corpus)
-        print('there are {} instances in {}'.format(self.total_valid_instances, valid_file))
+        logger.info('there are {} instances in {}'.format(self.total_valid_instances, valid_file))
         self.test_corpus = self.read_file(test_file)
         self.total_test_instances = len(self.test_corpus)
-        print('there are {} instances in {}'.format(self.total_test_instances, test_file))
+        logger.info('there are {} instances in {}'.format(self.total_test_instances, test_file))
 
     def read_file(self, file_path):
         corpus = []
-        print('reading data from {}...'.format(file_path))
+        logger.debug('reading data from {}...'.format(file_path))
         with open(file_path) as f:
             for line in tqdm.tqdm(f):
                 question, answer = line.strip('\n').split('\t')
-                tokens = self.tokenizer.tokenize(question)
-                mask = [1] * len(tokens)
-                if len(tokens) < self.seq_length:
-                    mask += [0] * (self.seq_length - len(tokens))
-                    tokens += ['[PAD]'] * (self.seq_length - len(tokens))
+                token_ids = self.tokenizer.encode(question, add_special_tokens=True)
+                mask = [1] * len(token_ids)
+                if len(token_ids) < self.seq_length:
+                    mask += [0] * (self.seq_length - len(token_ids))
+                    token_ids += [1] * (self.seq_length - len(token_ids))
                 else:
-                    tokens = tokens[: self.seq_length]
-                    mask = mask[: self.seq_length]
-                token_ids = self.tokenizer.convert_tokens_to_ids(tokens)
+                    token_ids = token_ids[: self.seq_length]
+                    mask = mask[: self.seq_length - 1] + [2]
                 head = re.match('(.*)\[(.*)\](.*)', question).groups()[1]
                 answers = answer.split('|')
                 head_id = [self.ent_dict[head]]
