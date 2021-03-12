@@ -2,6 +2,7 @@ from pytorch_transformers import RobertaTokenizer
 import re
 import tqdm
 import logging
+import random
 BERT_PATH = "C:/Users/yeeeqichen/Desktop/语言模型/roberta-base"
 logger = logging.getLogger(__name__)
 
@@ -19,14 +20,17 @@ class DataLoader:
                 entity, entity_id = line.strip('\n').split('\t')
                 self.ent_dict[entity] = int(entity_id)
         logger.info('there are {} entities'.format(len(self.ent_dict)))
-        self.train_corpus = self.read_file(train_file)
-        self.total_train_instances = len(self.train_corpus)
+        self.train_corpus = self.read_file(train_file)[: 96106]
+        self.total_train_instances = 96106
+        random.shuffle(self.train_corpus)
         logger.info('there are {} instances in {}'.format(self.total_train_instances, train_file))
         self.valid_corpus = self.read_file(valid_file)
         self.total_valid_instances = len(self.valid_corpus)
+        random.shuffle(self.valid_corpus)
         logger.info('there are {} instances in {}'.format(self.total_valid_instances, valid_file))
         self.test_corpus = self.read_file(test_file)
         self.total_test_instances = len(self.test_corpus)
+        random.shuffle(self.test_corpus)
         logger.info('there are {} instances in {}'.format(self.total_test_instances, test_file))
 
     def read_file(self, file_path):
@@ -50,10 +54,18 @@ class DataLoader:
                 corpus.append([question, [token_ids, mask], head_id, answers_id])
         return corpus
 
-    def train_batch_generator(self):
-        steps = self.total_train_instances // self.batch_size
+    def batch_generator(self, purpose):
+        if purpose == 'train':
+            corpus = self.train_corpus
+            steps = self.total_train_instances // self.batch_size
+        elif purpose == 'valid':
+            corpus = self.valid_corpus
+            steps = self.total_valid_instances // self.batch_size
+        else:
+            corpus = self.test_corpus
+            steps = self.total_test_instances // self.batch_size
         for i in range(steps):
-            temp = self.train_corpus[i * self.batch_size: (i + 1) * self.batch_size]
+            temp = corpus[i * self.batch_size: (i + 1) * self.batch_size]
             question_token_ids = [_[1][0] for _ in temp]
             question_masks = [_[1][1] for _ in temp]
             head_id = [_[2] for _ in temp]
@@ -64,7 +76,7 @@ class DataLoader:
 def test():
     a = DataLoader('./MetaQA/QA_data/qa_train_1hop.txt', './MetaQA/QA_data/qa_dev_1hop.txt',
                    './MetaQA/QA_data/qa_test_1hop.txt')
-    for batch in a.train_batch_generator():
+    for batch in a.batch_generator(purpose='train'):
         print(batch)
         break
 

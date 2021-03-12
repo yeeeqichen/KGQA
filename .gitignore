@@ -2,3 +2,4 @@ openke/
 model_Tue Jan 26 19_24_46 2021.ckpt
 test.py
 MetaQA/
+model/

@@ -9,23 +9,29 @@ logger = logging.getLogger(__name__)
 class RelationPredictor(torch.nn.Module):
     def __init__(self):
         super(RelationPredictor, self).__init__()
+        self.relation_names = []
+        with open('./MetaQA/KGE_data/relation2id.txt') as f:
+            for _, line in enumerate(f):
+                if _ == 0:
+                    continue
+                relation, _id = line.split('\t')
+                self.relation_names.append(relation.replace('_', ' '))
         logger.info('loading pretrained bert model...')
         self.question_embed = RobertaModel.from_pretrained(BERT_PATH)
         for param in self.question_embed.parameters():
             param.requires_grad = True
-        self.hidden2rel = torch.nn.Linear(768, 256)
-        torch.nn.init.xavier_uniform_(self.hidden2rel.weight)
-        self.classifier = torch.nn.Linear(256, 18)
+        # self.hidden2rel = torch.nn.Linear(768, 256)
+        # torch.nn.init.xavier_uniform_(self.hidden2rel.weight)
+        self.classifier = torch.nn.Linear(768, 18)
         torch.nn.init.xavier_uniform_(self.classifier.weight)
-        self.relu = torch.nn.ReLU()
-        self.dropout = torch.nn.Dropout(0.5)
+        # self.relu = torch.nn.ReLU()
+        # self.dropout = torch.nn.Dropout(0.5)
 
     def forward(self, question_token_ids, question_masks):
-        question_embed = self.dropout(
-            self.question_embed(input_ids=question_token_ids, attention_mask=question_masks)[1]
-        )
-        predict_rel = self.hidden2rel(self.relu(question_embed))
-        return self.classifier(predict_rel)
+        question_embed = torch.mean(self.question_embed(input_ids=question_token_ids,
+                                                        attention_mask=question_masks)[0], dim=1)
+        predict_rel = self.classifier(question_embed)
+        return predict_rel
 
 
 class QuestionAnswerModel(torch.nn.Module):
@@ -49,7 +55,6 @@ class QuestionAnswerModel(torch.nn.Module):
     def _to_tensor(self, inputs):
         return torch.tensor(inputs).to(self.device)
 
-    # todo: 把这个rotate的计算方式改了,score应为l2范数
     def rotateE(self, head, relation):
         """
         :param head: (batch_size, entity_embed)
@@ -80,7 +85,7 @@ class QuestionAnswerModel(torch.nn.Module):
         score = torch.stack([re_score, im_score], dim=0)
         score = score.norm(dim=0).sum(dim=-1)
         # (batch_size, ent_tot)
-        return score
+        return self.KG_embed.margin - score
         # pi = 3.1415926535
         # re_head, im_head = torch.chunk(head, 2, dim=1)
         # re_rotate = torch.cos(relation * pi)
@@ -103,10 +108,10 @@ class QuestionAnswerModel(torch.nn.Module):
         predict_relation = torch.index_select(self.KG_embed.rel_embeddings.weight, 0, rel_num.indices.view(-1))
         head_embed = self.KG_embed.ent_embeddings(self._to_tensor(head_id)).squeeze(1)
         # print(head_embed.shape, predict_relation.shape)
+        # scores越大越好
         scores = self.rotateE(head_embed, predict_relation)
         # print(scores.shape)
-        func = torch.nn.Softmax(dim=1)
-        return func(scores)
+        return scores
 
 
 def test():

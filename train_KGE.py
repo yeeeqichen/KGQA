@@ -32,7 +32,7 @@ parser.add_argument("--save_path", type=str, default="./checkpoint/model_{}.ckpt
 
 args = parser.parse_args()
 train_dataloader = TrainDataLoader(
-    in_path="./data/" + args.dataset + '/',
+    in_path='MetaQA/KGE_data/',
     batch_size=args.batch_size,
     threads=args.nthreads,
     sampling_mode=args.sampling_mode,
@@ -42,7 +42,7 @@ train_dataloader = TrainDataLoader(
     neg_rel=args.neg_rel
 )
 
-test_dataloader = TestDataLoader("./data/" + args.dataset + '/', "link")
+test_dataloader = TestDataLoader("MetaQA/KGE_data/", "link")
 embed_method = None
 if args.model == 'rotateE':
     embed_method = RotatE(
@@ -69,12 +69,12 @@ model = NegativeSampling(
 )
 
 # train the model
-trainer = Trainer(model=model, data_loader=train_dataloader, train_times=args.EPOCH, valid_steps=args.valid_step,
-                  alpha=args.alpha, use_gpu=args.cuda, opt_method=args.opt_method, test_data_loader=test_dataloader)
-trainer.run()
-embed_method.save_checkpoint(args.save_path)
+# trainer = Trainer(model=model, data_loader=train_dataloader, train_times=args.EPOCH, valid_steps=args.valid_step,
+#                   alpha=args.alpha, use_gpu=args.cuda, opt_method=args.opt_method, test_data_loader=test_dataloader)
+# trainer.run()
+# embed_method.save_checkpoint(args.save_path)
 
 # test the model
-embed_method.load_checkpoint(args.save_path)
+embed_method.load_checkpoint('./model_Tue Jan 26 19_24_46 2021.ckpt')
 tester = Tester(model=embed_method, data_loader=test_dataloader, use_gpu=args.cuda)
 tester.run_link_prediction(type_constrain=args.type_constrain)
