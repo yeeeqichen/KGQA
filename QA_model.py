@@ -20,17 +20,18 @@ class RelationPredictor(torch.nn.Module):
         self.question_embed = RobertaModel.from_pretrained(BERT_PATH)
         for param in self.question_embed.parameters():
             param.requires_grad = True
-        # self.hidden2rel = torch.nn.Linear(768, 256)
-        # torch.nn.init.xavier_uniform_(self.hidden2rel.weight)
-        self.classifier = torch.nn.Linear(768, 18)
-        torch.nn.init.xavier_uniform_(self.classifier.weight)
+        self.hidden2rel = torch.nn.Linear(768, 18)
+        torch.nn.init.xavier_uniform_(self.hidden2rel.weight)
+        # self.classifier = torch.nn.Linear(768, 18)
+        # torch.nn.init.normal_(self.classifier.weight, mean=0, std=1)
+        # logger.info(self.classifier.weight)
         # self.relu = torch.nn.ReLU()
         # self.dropout = torch.nn.Dropout(0.5)
 
     def forward(self, question_token_ids, question_masks):
         question_embed = torch.mean(self.question_embed(input_ids=question_token_ids,
                                                         attention_mask=question_masks)[0], dim=1)
-        predict_rel = self.classifier(question_embed)
+        predict_rel = self.hidden2rel(question_embed)
         return predict_rel
 
 
@@ -50,6 +51,8 @@ class QuestionAnswerModel(torch.nn.Module):
         self.embed_model_path = embed_model_path
         logger.info('loading pretrained KG embedding from {}'.format(self.embed_model_path))
         self.KG_embed.load_checkpoint(self.embed_model_path)
+        self.KG_embed.ent_embeddings.weight.requires_grad = False
+        self.KG_embed.rel_embeddings.weight.requires_grad = False
         self.KG_embed.to(self.device)
 
     def _to_tensor(self, inputs):
@@ -86,31 +89,17 @@ class QuestionAnswerModel(torch.nn.Module):
         score = score.norm(dim=0).sum(dim=-1)
         # (batch_size, ent_tot)
         return self.KG_embed.margin - score
-        # pi = 3.1415926535
-        # re_head, im_head = torch.chunk(head, 2, dim=1)
-        # re_rotate = torch.cos(relation * pi)
-        # im_rotate = torch.sin(relation * pi)
-        # real_part = re_head * re_rotate - im_head * im_rotate
-        # image_part = re_head * im_rotate + im_head * re_rotate
-        # # (num_entities, hidden / 2)
-        # re_tail, im_tail = torch.chunk(self.KG_embed.ent_embeddings.weight, 2, dim=1)
-        # # (batch, num_entities, hidden / 2)
-        # real_part = real_part.abs().unsqueeze(1).repeat(1, self.KG_embed.ent_tot, 1)
-        # image_part = image_part.abs().unsqueeze(1).repeat(1, self.KG_embed.ent_tot, 1)
-        # # (batch, num_entities)，这里取L1距离进行度量
-        # score = (((real_part - re_tail) + (image_part - im_tail)).sum(dim=2)).reciprocal()
-        # return score
 
     def forward(self, question_token_ids, question_masks, head_id):
         rel_scores = self.relation_predictor(self._to_tensor(question_token_ids), self._to_tensor(question_masks))
-        # print(rel_scores.shape)
-        rel_num = torch.max(rel_scores, 1, keepdim=True)
-        predict_relation = torch.index_select(self.KG_embed.rel_embeddings.weight, 0, rel_num.indices.view(-1))
+        # relation的预测方式采用self.KG_embed.rel_embeddings.weight的线性组合，取softmax（scores）作为组合系数
+        predict_relation = torch.matmul(torch.softmax(rel_scores, dim=1), self.KG_embed.rel_embeddings.weight)
+        # 下面这种计算relation的方式会有奇妙的bug，怀疑是index_select方法返回的新tensor无法继承grad？
+        # rel_num = torch.max(rel_scores, 1, keepdim=True)
+        # predict_relation = torch.index_select(self.KG_embed.rel_embeddings.weight, 0, rel_num.indices.view(-1))
         head_embed = self.KG_embed.ent_embeddings(self._to_tensor(head_id)).squeeze(1)
-        # print(head_embed.shape, predict_relation.shape)
         # scores越大越好
         scores = self.rotateE(head_embed, predict_relation)
-        # print(scores.shape)
         return scores
 
 
