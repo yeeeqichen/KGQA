@@ -6,11 +6,16 @@ import random
 BERT_PATH = "C:/Users/yeeeqichen/Desktop/语言模型/roberta-base"
 logger = logging.getLogger(__name__)
 
+
 # train 一共96106句问答
 class DataLoader:
     def __init__(self, train_file, valid_file, test_file, dict_path,
-                 batch_size=32, seq_length=20):
+                 batch_size=4, seq_length=20, negative_sample_size=None):
         self.batch_size = batch_size
+        if negative_sample_size is not None:
+            self.negative_sample_size = negative_sample_size
+        else:
+            self.negative_sample_size = batch_size
         self.seq_length = seq_length
         self.ent_dict = {}
         self.tokenizer = RobertaTokenizer.from_pretrained(BERT_PATH)
@@ -54,6 +59,7 @@ class DataLoader:
                 corpus.append([question, [token_ids, mask], head_id, answers_id])
         return corpus
 
+    # todo: 增加negative_sampling(目前是naive的随机采样，后续可以学习NSCaching、K-neighbor采样等）
     def batch_generator(self, purpose):
         if purpose == 'train':
             corpus = self.train_corpus
@@ -70,15 +76,34 @@ class DataLoader:
             question_masks = [_[1][1] for _ in temp]
             head_id = [_[2] for _ in temp]
             answers_id = [_[3] for _ in temp]
-            yield question_token_ids, question_masks, head_id, answers_id
+            if purpose == 'train':
+                negative_samples = []
+                for _answers in answers_id:
+                    temp = []
+                    while len(temp) < len(_answers):
+                        rand_int = random.randint(0, len(self.ent_dict) - 1)
+                        if rand_int not in _answers:
+                            temp.append(rand_int)
+                    negative_samples.append(temp)
+                # print(answers_id, negative_samples)
+                yield question_token_ids, question_masks, head_id, answers_id, negative_samples
+            else:
+                yield question_token_ids, question_masks, head_id, answers_id
 
 
 def test():
     a = DataLoader('./MetaQA/QA_data/qa_train_1hop.txt', './MetaQA/QA_data/qa_dev_1hop.txt',
-                   './MetaQA/QA_data/qa_test_1hop.txt')
+                   './MetaQA/QA_data/qa_test_1hop.txt', dict_path='./MetaQA/QA_data/entities.dict')
     for batch in a.batch_generator(purpose='train'):
-        print(batch)
-        break
+        _, _, _, positive, negative = batch
+        assert len(positive) == len(negative)
+        for i, j in zip(negative, positive):
+            for k in i:
+                if k in j:
+                    print('ERROR')
+                    exit(-1)
+        print('PASS')
+        # print(batch)
 
 
 if __name__ == '__main__':

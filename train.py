@@ -7,6 +7,8 @@ import tqdm
 from pytorch_transformers import AdamW
 import os
 import time
+from graph_manager import MyGraph
+import matplotlib.pyplot as plt
 
 parser = argparse.ArgumentParser()
 
@@ -29,6 +31,8 @@ parser.add_argument("--gamma", type=float, default=0.95)
 parser.add_argument("--adam_epsilon", default=1e-8, type=float)
 parser.add_argument("--max_gradient_norm", type=int, default=10)
 parser.add_argument("--scheduler_steps", type=int, default=100)
+parser.add_argument("--plot_steps", type=int, default=1000)
+parser.add_argument("--continue_best_model", action='store_true', default=True)
 
 
 args = parser.parse_args()
@@ -49,8 +53,9 @@ fh = logging.FileHandler(save_path + '/log.txt')
 fh.setFormatter(formatter)
 logger.addHandler(fh)
 
+graph = MyGraph()
 
-# todo: 增加训练时参数的保存（done）；优化relation预测（done，改为softmax）；在loss中尝试加入negative项
+
 def train(model, data_loader):
     param_optimizer = list(model.named_parameters())
     no_decay = ['bias', 'LayerNorm.bias', 'LayerNorm.weight']
@@ -72,22 +77,35 @@ def train(model, data_loader):
     model.train()
     for i in range(args.EPOCH):
         steps = 1
-        for question_token_ids, question_masks, head_id, answers_id in tqdm.tqdm(data_loader.batch_generator('train')):
+        for question_token_ids, question_masks, head_id, answers_id, negative_ids \
+                in tqdm.tqdm(data_loader.batch_generator('train')):
             model.zero_grad()
             scores = model(question_token_ids, question_masks, head_id).cpu()
             cur_loss = []
-            for score, answers in zip(scores, answers_id):
-                target_scores = torch.index_select(score, 0, torch.tensor(answers))
-                cur_loss.append(torch.sum(-torch.log(torch.sigmoid(target_scores))))
+            # 下面计算一个batch内的loss
+            for score, answers, negatives in zip(scores, answers_id, negative_ids):
+                # 每次循环计算一个（h, r, t)的loss，分为positive和negative两部分
+                positive_scores = torch.index_select(score, 0, torch.tensor(answers))
+                negative_scores = torch.index_select(-score, 0, torch.tensor(negatives))
+                # target_scores = torch.index_select(score, 0, torch.tensor(answers))
+                # print(positive_scores, sum(target_scores))
+                cur_loss.append(
+                    torch.sum(-torch.log(torch.sigmoid(positive_scores)))
+                    +
+                    torch.sum(-torch.log(torch.sigmoid(negative_scores)))
+                )
+                # logger.debug(cur_loss)
                 # loss.append(torch.sum(target_scores))
                 # loss.append(torch.sum(-torch.log(target_scores)))
             train_loss = torch.stack(cur_loss).mean()
             total_loss.append(train_loss)
             if steps % args.scheduler_steps == 0:
                 average_loss = torch.stack(total_loss).mean()
+                graph.average_train_loss.append((steps, average_loss.detach().numpy()))
                 logger.info('EPOCH: {}, STEP: {}, average loss: {}'.format(i, steps, average_loss))
                 total_loss = []
             train_loss.backward()
+            graph.train_loss.append((steps, train_loss.detach().numpy()))
             # 进行梯度裁剪
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.max_gradient_norm)
             optimizer.step()
@@ -115,8 +133,12 @@ def train(model, data_loader):
                 logger.info('EPOCH: {}, STEP: {}, Hits_1: {}, Hits_3: {}, Hits_10: {}'
                             .format(i, steps, cur_performance['hits_1'], cur_performance['hits_3'],
                                     cur_performance['hits_10']))
+                graph.hits_1.append((steps, hits_1 / cnt))
+                graph.hits_3.append((steps, hits_3 / cnt))
+                graph.hits_10.append((steps, hits_10 / cnt))
                 # 依据验证集上的表现来调整学习率
                 scheduler.step(cur_performance['hits_1'])
+                graph.lr.append((optimizer.param_groups[0]['lr'], optimizer.param_groups[1]['lr']))
                 if cur_performance['hits_1'] > best_performance['hits_1']:
                     best_performance = cur_performance
                     if args.require_save:
@@ -135,12 +157,30 @@ def train(model, data_loader):
                     if require_improvement == args.require_improvement:
                         logger.warning('EXIT: training finished because of no improvement')
                         exit(-1)
+            if steps % args.plot_steps == 0:
+                plt.figure()
+                plt.plot([_[0] for _ in graph.train_loss], [_[1] for _ in graph.train_loss])
+                plt.savefig(save_path + '/train_loss_EPOCH{}.png'.format(i))
+                plt.figure()
+                plt.plot([_[0] for _ in graph.average_train_loss], [_[1] for _ in graph.average_train_loss])
+                plt.savefig(save_path + '/average_train_loss_EPOCH{}.png'.format(i))
+                plt.figure()
+                _x = [_[0] for _ in graph.hits_1]
+                plt.plot(_x, [_[1] for _ in graph.hits_1])
+                plt.plot(_x, [_[1] for _ in graph.hits_3])
+                plt.plot(_x, [_[1] for _ in graph.hits_10])
+                plt.savefig(save_path + '/performance_EPOCH{}.png'.format(i))
+
             steps += 1
     logger.info('finish training')
 
 
 def main():
     model = QuestionAnswerModel(embed_model_path='./model_Tue Jan 26 19_24_46 2021.ckpt')
+    if args.continue_best_model:
+        path = 'model/2021-03-15__14-12-14/model.pkl'
+        logger.info('continue training, loading model stat_dict from {}'.format(path))
+        model.load_state_dict(torch.load(path))
     total_param = 0
     for name, param in model.named_parameters():
         num = 1

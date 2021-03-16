@@ -93,7 +93,7 @@ class QuestionAnswerModel(torch.nn.Module):
     def forward(self, question_token_ids, question_masks, head_id):
         rel_scores = self.relation_predictor(self._to_tensor(question_token_ids), self._to_tensor(question_masks))
         # relation的预测方式采用self.KG_embed.rel_embeddings.weight的线性组合，取softmax（scores）作为组合系数
-        predict_relation = torch.matmul(torch.softmax(rel_scores, dim=1), self.KG_embed.rel_embeddings.weight)
+        predict_relation = torch.matmul(torch.sigmoid(rel_scores), self.KG_embed.rel_embeddings.weight)
         # 下面这种计算relation的方式会有奇妙的bug，怀疑是index_select方法返回的新tensor无法继承grad？
         # rel_num = torch.max(rel_scores, 1, keepdim=True)
         # predict_relation = torch.index_select(self.KG_embed.rel_embeddings.weight, 0, rel_num.indices.view(-1))
