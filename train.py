@@ -25,7 +25,7 @@ parser.add_argument("--log_level", type=str, default="DEBUG")
 parser.add_argument("--require_improvement", type=int, default=100)
 parser.add_argument("--save_path", type=str, default='/model/' + time.strftime("%Y-%m-%d__%H-%M-%S", time.localtime()))
 parser.add_argument("--require_save", action='store_true', default=True)
-parser.add_argument("--lr", default=2e-5, type=float)
+parser.add_argument("--lr", default=1e-5, type=float)
 parser.add_argument("--weight_decay", default=0.0, type=float)
 parser.add_argument("--gamma", type=float, default=0.95)
 parser.add_argument("--adam_epsilon", default=1e-8, type=float)
@@ -33,6 +33,7 @@ parser.add_argument("--max_gradient_norm", type=int, default=10)
 parser.add_argument("--scheduler_steps", type=int, default=100)
 parser.add_argument("--plot_steps", type=int, default=1000)
 parser.add_argument("--continue_best_model", action='store_true', default=True)
+parser.add_argument("--negative_sampling_rate", type=float, default=1.0)
 
 
 args = parser.parse_args()
@@ -77,6 +78,13 @@ def train(model, data_loader):
     model.train()
     for i in range(args.EPOCH):
         steps = 1
+        graph.train_loss.append([])
+        graph.average_train_loss.append([])
+        graph.negative_loss.append([])
+        graph.positive_loss.append([])
+        graph.hits_1.append([])
+        graph.hits_3.append([])
+        graph.hits_10.append([])
         for question_token_ids, question_masks, head_id, answers_id, negative_ids \
                 in tqdm.tqdm(data_loader.batch_generator('train')):
             model.zero_grad()
@@ -89,11 +97,13 @@ def train(model, data_loader):
                 negative_scores = torch.index_select(-score, 0, torch.tensor(negatives))
                 # target_scores = torch.index_select(score, 0, torch.tensor(answers))
                 # print(positive_scores, sum(target_scores))
-                cur_loss.append(
-                    torch.sum(-torch.log(torch.sigmoid(positive_scores)))
-                    +
-                    torch.sum(-torch.log(torch.sigmoid(negative_scores)))
-                )
+                positive_loss = torch.sum(-torch.log(torch.sigmoid(positive_scores)))
+                negative_loss = torch.sum(-torch.log(torch.sigmoid(negative_scores)))
+
+                graph.positive_loss[i].append((steps, positive_loss.detach()))
+                graph.negative_loss[i].append((steps, negative_loss.detach()))
+
+                cur_loss.append(positive_loss + negative_loss)
                 # logger.debug(cur_loss)
                 # loss.append(torch.sum(target_scores))
                 # loss.append(torch.sum(-torch.log(target_scores)))
@@ -101,11 +111,11 @@ def train(model, data_loader):
             total_loss.append(train_loss)
             if steps % args.scheduler_steps == 0:
                 average_loss = torch.stack(total_loss).mean()
-                graph.average_train_loss.append((steps, average_loss.detach().numpy()))
+                graph.average_train_loss[i].append((steps, average_loss.detach()))
                 logger.info('EPOCH: {}, STEP: {}, average loss: {}'.format(i, steps, average_loss))
                 total_loss = []
             train_loss.backward()
-            graph.train_loss.append((steps, train_loss.detach().numpy()))
+            graph.train_loss[i].append((steps, train_loss.detach()))
             # 进行梯度裁剪
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.max_gradient_norm)
             optimizer.step()
@@ -133,9 +143,9 @@ def train(model, data_loader):
                 logger.info('EPOCH: {}, STEP: {}, Hits_1: {}, Hits_3: {}, Hits_10: {}'
                             .format(i, steps, cur_performance['hits_1'], cur_performance['hits_3'],
                                     cur_performance['hits_10']))
-                graph.hits_1.append((steps, hits_1 / cnt))
-                graph.hits_3.append((steps, hits_3 / cnt))
-                graph.hits_10.append((steps, hits_10 / cnt))
+                graph.hits_1[i].append((steps, hits_1 / cnt))
+                graph.hits_3[i].append((steps, hits_3 / cnt))
+                graph.hits_10[i].append((steps, hits_10 / cnt))
                 # 依据验证集上的表现来调整学习率
                 scheduler.step(cur_performance['hits_1'])
                 graph.lr.append((optimizer.param_groups[0]['lr'], optimizer.param_groups[1]['lr']))
@@ -158,18 +168,32 @@ def train(model, data_loader):
                         logger.warning('EXIT: training finished because of no improvement')
                         exit(-1)
             if steps % args.plot_steps == 0:
-                plt.figure()
-                plt.plot([_[0] for _ in graph.train_loss], [_[1] for _ in graph.train_loss])
+                def _init_figure(title, x_label, y_label):
+                    plt.figure()
+                    plt.grid(True)
+                    # plt.axis('tight')
+                    plt.title(title)
+                    plt.xlabel(x_label)
+                    plt.ylabel(y_label)
+                _init_figure(title='train_loss', x_label='Steps', y_label='Train_loss')
+                plt.plot([_[0] for _ in graph.train_loss[i]], [_[1].tolist() for _ in graph.train_loss[i]])
                 plt.savefig(save_path + '/train_loss_EPOCH{}.png'.format(i))
-                plt.figure()
-                plt.plot([_[0] for _ in graph.average_train_loss], [_[1] for _ in graph.average_train_loss])
+                _init_figure(title='average_train_loss', x_label='Steps', y_label='Average_train_loss')
+                plt.plot([_[0] for _ in graph.average_train_loss[i]], [_[1].tolist() for _ in graph.average_train_loss[i]])
                 plt.savefig(save_path + '/average_train_loss_EPOCH{}.png'.format(i))
-                plt.figure()
-                _x = [_[0] for _ in graph.hits_1]
-                plt.plot(_x, [_[1] for _ in graph.hits_1])
-                plt.plot(_x, [_[1] for _ in graph.hits_3])
-                plt.plot(_x, [_[1] for _ in graph.hits_10])
+                _init_figure(title='performance', x_label='Steps', y_label='Percentage')
+                _x = [_[0] for _ in graph.hits_1[i]]
+                plt.plot(_x, [_[1] for _ in graph.hits_1[i]], label='hits_1')
+                plt.plot(_x, [_[1] for _ in graph.hits_3[i]], label='hits_3')
+                plt.plot(_x, [_[1] for _ in graph.hits_10[i]], label='hits_10')
+                plt.legend()
                 plt.savefig(save_path + '/performance_EPOCH{}.png'.format(i))
+                _init_figure(title='positive_loss and negative_loss', x_label='Steps', y_label='Loss')
+                _x = [_[0] for _ in graph.positive_loss[i]]
+                plt.plot(_x, [_[1].tolist() for _ in graph.positive_loss[i]], label='positive')
+                plt.plot(_x, [_[1].tolist() for _ in graph.negative_loss[i]], label='negative')
+                plt.legend()
+                plt.savefig(save_path + '/positive_and_negative_loss{}.png'.format(i))
 
             steps += 1
     logger.info('finish training')
@@ -178,7 +202,7 @@ def train(model, data_loader):
 def main():
     model = QuestionAnswerModel(embed_model_path='./model_Tue Jan 26 19_24_46 2021.ckpt')
     if args.continue_best_model:
-        path = 'model/2021-03-15__14-12-14/model.pkl'
+        path = 'model/2021-03-16__10-08-24/model.pkl'
         logger.info('continue training, loading model stat_dict from {}'.format(path))
         model.load_state_dict(torch.load(path))
     total_param = 0
@@ -195,7 +219,8 @@ def main():
         test_file=args.test_file,
         batch_size=args.batch_size,
         seq_length=args.seq_length,
-        dict_path=args.dict_path
+        dict_path=args.dict_path,
+        negative_sample_rate=args.negative_sampling_rate
     )
     model.to(model.device)
     train(model, data_loader)
