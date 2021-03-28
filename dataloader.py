@@ -3,19 +3,18 @@ import re
 import tqdm
 import logging
 import random
-BERT_PATH = "C:/Users/yeeeqichen/Desktop/语言模型/roberta-base"
 logger = logging.getLogger(__name__)
 
 
 # train 一共96106句问答
 class DataLoader:
-    def __init__(self, train_file, valid_file, test_file, dict_path,
+    def __init__(self, train_file, valid_file, test_file, dict_path, bert_path,
                  batch_size=4, seq_length=20, negative_sample_rate=1.0):
         self.batch_size = batch_size
         self.negative_sampling_rate = negative_sample_rate
         self.seq_length = seq_length
         self.ent_dict = {}
-        self.tokenizer = RobertaTokenizer.from_pretrained(BERT_PATH)
+        self.tokenizer = RobertaTokenizer.from_pretrained(bert_path)
         logger.info('reading entity dict...')
         with open(dict_path) as f:
             for line in f:
@@ -41,7 +40,10 @@ class DataLoader:
         with open(file_path) as f:
             for line in tqdm.tqdm(f):
                 question, answer = line.strip('\n').split('\t')
-                token_ids = self.tokenizer.encode(question, add_special_tokens=True)
+                head = re.match('(.*)\[(.*)\](.*)', question).groups()[1]
+                # what films did [John Williams] write --> what films did xxx write
+                new_question = re.sub('\[.*\]', 'xxx', question)
+                token_ids = self.tokenizer.encode(new_question, add_special_tokens=True)
                 mask = [1] * len(token_ids)
                 if len(token_ids) < self.seq_length:
                     mask += [0] * (self.seq_length - len(token_ids))
@@ -49,11 +51,10 @@ class DataLoader:
                 else:
                     token_ids = token_ids[: self.seq_length]
                     mask = mask[: self.seq_length - 1] + [2]
-                head = re.match('(.*)\[(.*)\](.*)', question).groups()[1]
                 answers = answer.split('|')
                 head_id = [self.ent_dict[head]]
                 answers_id = [self.ent_dict[answer] for answer in answers]
-                corpus.append([question, [token_ids, mask], head_id, answers_id])
+                corpus.append([new_question, [token_ids, mask], head_id, answers_id])
         return corpus
 
     def batch_generator(self, purpose):
@@ -89,16 +90,17 @@ class DataLoader:
 
 def test():
     a = DataLoader('./MetaQA/QA_data/qa_train_1hop.txt', './MetaQA/QA_data/qa_dev_1hop.txt',
-                   './MetaQA/QA_data/qa_test_1hop.txt', dict_path='./MetaQA/QA_data/entities.dict')
+                   './MetaQA/QA_data/qa_test_1hop.txt', dict_path='./MetaQA/QA_data/entities.dict',
+                   bert_path='C:/Users/yeeeqichen/Desktop/语言模型/roberta-base')
     for batch in a.batch_generator(purpose='train'):
         _, _, _, positive, negative = batch
-        assert len(positive) == len(negative)
-        for i, j in zip(negative, positive):
-            for k in i:
-                if k in j:
-                    print('ERROR')
-                    exit(-1)
-        print('PASS')
+        # assert len(positive) == len(negative)
+        # for i, j in zip(negative, positive):
+        #     for k in i:
+        #         if k in j:
+        #             print('ERROR')
+        #             exit(-1)
+        # print('PASS')
         # print(batch)
 
 

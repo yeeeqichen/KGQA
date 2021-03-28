@@ -12,6 +12,9 @@ import matplotlib.pyplot as plt
 
 parser = argparse.ArgumentParser()
 
+parser.add_argument("--bert_path", type=str, default="C:/Users/yeeeqichen/Desktop/语言模型/roberta-base")
+parser.add_argument("--embed_model_path", type=str, default="./checkpoint/")
+parser.add_argument("--embed_method", type=str, default='rotatE')
 parser.add_argument("--train_file", type=str, default="./MetaQA/QA_data/qa_train_1hop.txt")
 parser.add_argument("--valid_file", type=str, default="./MetaQA/QA_data/qa_dev_1hop.txt")
 parser.add_argument("--test_file", type=str, default="./MetaQA/QA_data/qa_test_1hop.txt")
@@ -25,15 +28,17 @@ parser.add_argument("--log_level", type=str, default="DEBUG")
 parser.add_argument("--require_improvement", type=int, default=100)
 parser.add_argument("--save_path", type=str, default='/model/' + time.strftime("%Y-%m-%d__%H-%M-%S", time.localtime()))
 parser.add_argument("--require_save", action='store_true', default=True)
-parser.add_argument("--lr", default=1e-5, type=float)
+parser.add_argument("--lr", default=2e-5, type=float)
 parser.add_argument("--weight_decay", default=0.0, type=float)
 parser.add_argument("--gamma", type=float, default=0.95)
 parser.add_argument("--adam_epsilon", default=1e-8, type=float)
 parser.add_argument("--max_gradient_norm", type=int, default=10)
 parser.add_argument("--scheduler_steps", type=int, default=100)
 parser.add_argument("--plot_steps", type=int, default=1000)
-parser.add_argument("--continue_best_model", action='store_true', default=True)
+parser.add_argument("--continue_best_model", action='store_true', default=False)
 parser.add_argument("--negative_sampling_rate", type=float, default=1.0)
+parser.add_argument("--n_clusters", type=int, default=8)
+parser.add_argument("--use_cluster", action='store_true', default=False)
 
 
 args = parser.parse_args()
@@ -71,7 +76,7 @@ def train(model, data_loader):
         }
     ]
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.lr)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=0.95, patience=0, verbose=True)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", factor=0.95, patience=2, verbose=True)
     best_performance = {'hits_1': 0, 'hits_3': 0, 'hits_10': 0}
     require_improvement = 0
     total_loss = []
@@ -85,6 +90,7 @@ def train(model, data_loader):
         graph.hits_1.append([])
         graph.hits_3.append([])
         graph.hits_10.append([])
+        total_norms = []
         for question_token_ids, question_masks, head_id, answers_id, negative_ids \
                 in tqdm.tqdm(data_loader.batch_generator('train')):
             model.zero_grad()
@@ -109,13 +115,25 @@ def train(model, data_loader):
                 # loss.append(torch.sum(-torch.log(target_scores)))
             train_loss = torch.stack(cur_loss).mean()
             total_loss.append(train_loss)
+            graph.train_loss[i].append((steps, train_loss.detach()))
             if steps % args.scheduler_steps == 0:
                 average_loss = torch.stack(total_loss).mean()
+                average_norm = torch.stack(total_norms).mean()
                 graph.average_train_loss[i].append((steps, average_loss.detach()))
-                logger.info('EPOCH: {}, STEP: {}, average loss: {}'.format(i, steps, average_loss))
+                logger.info('EPOCH: {}, STEP: {}, average loss: {}, average norm: {}'
+                            .format(i, steps, average_loss, average_norm))
                 total_loss = []
             train_loss.backward()
-            graph.train_loss[i].append((steps, train_loss.detach()))
+            # 统计一下训练过程中的梯度情况，来作为梯度裁剪参数的依据
+            temp = []
+            for p in model.parameters():
+                # print(p)
+                if p.requires_grad and p.grad is not None:
+                    temp.append(torch.norm(p.grad.detach().to(model.device), 2.0))
+            total_norm = torch.norm(torch.stack(temp), 2.0)
+            # total_norm = torch.norm(torch.stack([torch.norm(p.grad.detach().to(model.device), 2.0)
+            #                                      for p in model.parameters()]), 2.0)
+            total_norms.append(total_norm)
             # 进行梯度裁剪
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=args.max_gradient_norm)
             optimizer.step()
@@ -125,20 +143,39 @@ def train(model, data_loader):
                 hits_3 = 0
                 hits_10 = 0
                 cnt = 0
-                for _question, _mask, _head, _answers in data_loader.batch_generator('valid'):
-                    scores = model(_question, _mask, _head).cpu()
-                    predicts = torch.sort(scores, dim=1, descending=True).indices
-                    for predict, _answer in zip(predicts, _answers):
-                        cnt += 1
-                        for j in range(10):
-                            if predict[j] in _answer:
-                                if j == 0:
-                                    hits_1 += 1
-                                if j < 3:
-                                    hits_3 += 1
-                                if j < 10:
-                                    hits_10 += 1
-                                break
+                with torch.no_grad():
+                    for _question, _mask, _head, _answers in data_loader.batch_generator('valid'):
+                        if not args.use_cluster:
+                            scores = model(_question, _mask, _head).cpu()
+                            predicts = torch.sort(scores, dim=1, descending=True).indices
+                            for predict, _answer in zip(predicts, _answers):
+                                cnt += 1
+                                for j in range(10):
+                                    if predict[j] in _answer:
+                                        if j == 0:
+                                            hits_1 += 1
+                                        if j < 3:
+                                            hits_3 += 1
+                                        if j < 10:
+                                            hits_10 += 1
+                                        break
+                        else:
+                            scores, indices = model(_question, _mask, _head, use_cluster=True)
+                            predicts = []
+                            for _scores in scores:
+                                predicts.append(torch.sort(_scores, dim=1, descending=True).indices.squeeze(0)[:10])
+                            for predict, _answer, cluster_index in zip(predicts, _answers, indices):
+                                # print(predict, cluster_index)
+                                cnt += 1
+                                for rank, j in enumerate(predict):
+                                    if model.cluster2ent[cluster_index][j] in _answer:
+                                        if rank == 0:
+                                            hits_1 += 1
+                                        if rank < 3:
+                                            hits_3 += 1
+                                        if rank < 10:
+                                            hits_10 += 1
+                                        break
                 cur_performance = {'hits_1': hits_1 / cnt, 'hits_3': hits_3 / cnt, 'hits_10': hits_10 / cnt}
                 logger.info('EPOCH: {}, STEP: {}, Hits_1: {}, Hits_3: {}, Hits_10: {}'
                             .format(i, steps, cur_performance['hits_1'], cur_performance['hits_3'],
@@ -178,9 +215,11 @@ def train(model, data_loader):
                 _init_figure(title='train_loss', x_label='Steps', y_label='Train_loss')
                 plt.plot([_[0] for _ in graph.train_loss[i]], [_[1].tolist() for _ in graph.train_loss[i]])
                 plt.savefig(save_path + '/train_loss_EPOCH{}.png'.format(i))
+                plt.close()
                 _init_figure(title='average_train_loss', x_label='Steps', y_label='Average_train_loss')
                 plt.plot([_[0] for _ in graph.average_train_loss[i]], [_[1].tolist() for _ in graph.average_train_loss[i]])
                 plt.savefig(save_path + '/average_train_loss_EPOCH{}.png'.format(i))
+                plt.close()
                 _init_figure(title='performance', x_label='Steps', y_label='Percentage')
                 _x = [_[0] for _ in graph.hits_1[i]]
                 plt.plot(_x, [_[1] for _ in graph.hits_1[i]], label='hits_1')
@@ -188,21 +227,25 @@ def train(model, data_loader):
                 plt.plot(_x, [_[1] for _ in graph.hits_10[i]], label='hits_10')
                 plt.legend()
                 plt.savefig(save_path + '/performance_EPOCH{}.png'.format(i))
+                plt.close()
                 _init_figure(title='positive_loss and negative_loss', x_label='Steps', y_label='Loss')
                 _x = [_[0] for _ in graph.positive_loss[i]]
                 plt.plot(_x, [_[1].tolist() for _ in graph.positive_loss[i]], label='positive')
                 plt.plot(_x, [_[1].tolist() for _ in graph.negative_loss[i]], label='negative')
                 plt.legend()
                 plt.savefig(save_path + '/positive_and_negative_loss{}.png'.format(i))
+                plt.close()
 
             steps += 1
     logger.info('finish training')
 
 
 def main():
-    model = QuestionAnswerModel(embed_model_path='./model_Tue Jan 26 19_24_46 2021.ckpt')
+    embed_model_path = args.embed_model_path + args.embed_method + '.ckpt'
+    model = QuestionAnswerModel(embed_model_path=embed_model_path, embed_method=args.embed_method,
+                                bert_path=args.bert_path, n_clusters=args.n_clusters)
     if args.continue_best_model:
-        path = 'model/2021-03-16__10-08-24/model.pkl'
+        path = 'model/2021-03-17__13-05-53/model.pkl'
         logger.info('continue training, loading model stat_dict from {}'.format(path))
         model.load_state_dict(torch.load(path))
     total_param = 0
@@ -220,6 +263,7 @@ def main():
         batch_size=args.batch_size,
         seq_length=args.seq_length,
         dict_path=args.dict_path,
+        bert_path=args.bert_path,
         negative_sample_rate=args.negative_sampling_rate
     )
     model.to(model.device)

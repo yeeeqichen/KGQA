@@ -1,5 +1,6 @@
 openke/
-model_Tue Jan 26 19_24_46 2021.ckpt
+checkpoint/*
 test.py
 MetaQA/
 model/
+openke.tar
