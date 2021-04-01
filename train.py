@@ -37,8 +37,10 @@ parser.add_argument("--scheduler_steps", type=int, default=100)
 parser.add_argument("--plot_steps", type=int, default=1000)
 parser.add_argument("--continue_best_model", action='store_true', default=False)
 parser.add_argument("--negative_sampling_rate", type=float, default=1.0)
+parser.add_argument("--negative_sampling_size", type=int, default=25)
 parser.add_argument("--n_clusters", type=int, default=8)
 parser.add_argument("--use_cluster", action='store_true', default=False)
+parser.add_argument("--fine_tune", action="store_true", default=False)
 
 
 args = parser.parse_args()
@@ -243,7 +245,7 @@ def train(model, data_loader):
 def main():
     embed_model_path = args.embed_model_path + args.embed_method + '.ckpt'
     model = QuestionAnswerModel(embed_model_path=embed_model_path, embed_method=args.embed_method,
-                                bert_path=args.bert_path, n_clusters=args.n_clusters)
+                                bert_path=args.bert_path, n_clusters=args.n_clusters, fine_tune=args.fine_tune)
     if args.continue_best_model:
         path = 'model/2021-03-17__13-05-53/model.pkl'
         logger.info('continue training, loading model stat_dict from {}'.format(path))
@@ -264,7 +266,8 @@ def main():
         seq_length=args.seq_length,
         dict_path=args.dict_path,
         bert_path=args.bert_path,
-        negative_sample_rate=args.negative_sampling_rate
+        negative_sample_rate=args.negative_sampling_rate,
+        negative_sample_size=args.negative_sampling_size,
     )
     model.to(model.device)
     train(model, data_loader)

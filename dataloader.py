@@ -9,9 +9,10 @@ logger = logging.getLogger(__name__)
 # train 一共96106句问答
 class DataLoader:
     def __init__(self, train_file, valid_file, test_file, dict_path, bert_path,
-                 batch_size=4, seq_length=20, negative_sample_rate=1.0):
+                 batch_size=4, seq_length=20, negative_sample_rate=1.0, negative_sample_size=25):
         self.batch_size = batch_size
         self.negative_sampling_rate = negative_sample_rate
+        self.negative_sampling_size = negative_sample_size
         self.seq_length = seq_length
         self.ent_dict = {}
         self.tokenizer = RobertaTokenizer.from_pretrained(bert_path)
@@ -77,7 +78,8 @@ class DataLoader:
                 negative_samples = []
                 for _answers in answers_id:
                     temp = []
-                    while len(temp) < len(_answers) * self.negative_sampling_rate:
+                    # while len(temp) < len(_answers) * self.negative_sampling_rate:
+                    while len(temp) < self.negative_sampling_size:
                         rand_int = random.randint(0, len(self.ent_dict) - 1)
                         if rand_int not in _answers:
                             temp.append(rand_int)

@@ -6,9 +6,8 @@ from sklearn.cluster import KMeans
 logger = logging.getLogger(__name__)
 
 
-# todo: 增加对多种score function的支持
 class RelationPredictor(torch.nn.Module):
-    def __init__(self, bert_path):
+    def __init__(self, bert_path, fine_tune=True):
         super(RelationPredictor, self).__init__()
         self.relation_names = []
         with open('./MetaQA/KGE_data/relation2id.txt') as f:
@@ -17,12 +16,35 @@ class RelationPredictor(torch.nn.Module):
                     continue
                 relation, _id = line.split('\t')
                 self.relation_names.append(relation.replace('_', ' '))
+        # 这个矩阵存储了每个entity可以关联的relation的类型，用于后续relation的预测
+        self.adjacencyMatrix = [[0.] * 18 for _ in range(43234)]
+        with open('./MetaQA/KGE_data/train2id.txt') as f:
+            for _, line in enumerate(f):
+                if _ == 0:
+                    continue
+                head, tail, relation = line.strip('\n').split(' ')
+                self.adjacencyMatrix[int(head)][int(relation)] = 1.
+        self.adjacencyHandler = torch.nn.Linear(18, 18)
+        # print(self.adjacencyMatrix[3])
+        # print(self.adjacencyMatrix[333])
+        self.fine_tune = fine_tune
         logger.info('loading pretrained bert model...')
         self.question_embed = RobertaModel.from_pretrained(bert_path)
-        for param in self.question_embed.parameters():
-            param.requires_grad = True
-        self.hidden2rel = torch.nn.Linear(768, 18)
-        torch.nn.init.xavier_uniform_(self.hidden2rel.weight)
+        if self.fine_tune:
+            for param in self.question_embed.parameters():
+                param.requires_grad = True
+            self.hidden2rel = torch.nn.Linear(768, 18)
+            torch.nn.init.xavier_uniform_(self.hidden2rel.weight)
+        else:
+            for param in self.question_embed.parameters():
+                param.requires_grad = False
+            self.hidden2rel = torch.nn.Sequential(
+                torch.nn.Linear(768, 256),
+                torch.nn.ReLU(),
+                torch.nn.Linear(256, 128),
+                torch.nn.ReLU(),
+                torch.nn.Linear(128, 18)
+            )
         # self.classifier = torch.nn.Linear(768, 18)
         # torch.nn.init.normal_(self.classifier.weight, mean=0, std=1)
         # logger.info(self.classifier.weight)
@@ -42,12 +64,12 @@ class RelationPredictor(torch.nn.Module):
 
 
 class QuestionAnswerModel(torch.nn.Module):
-    def __init__(self, embed_model_path, bert_path, n_clusters, embed_method='rotatE'):
+    def __init__(self, embed_model_path, bert_path, n_clusters, embed_method='rotatE', fine_tune=True):
         super(QuestionAnswerModel, self).__init__()
         self.embed_method = embed_method
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         logger.info('using device: {}'.format(self.device))
-        self.relation_predictor = RelationPredictor(bert_path=bert_path).to(self.device)
+        self.relation_predictor = RelationPredictor(bert_path=bert_path, fine_tune=fine_tune).to(self.device)
         if self.embed_method == 'rotatE':
             self.score_func = self.rotatE
             self.KG_embed = RotatE(
@@ -154,10 +176,16 @@ class QuestionAnswerModel(torch.nn.Module):
         # (batch_size, ent_tot)
         return self.KG_embed.margin - score
 
-    # todo: 这里想办法支持一下别的score func
     # 经实验 sigmoid效果最好
     def forward(self, question_token_ids, question_masks, head_id, use_cluster=False):
         rel_scores = self.relation_predictor(self._to_tensor(question_token_ids), self._to_tensor(question_masks))
+        _index = torch.tensor([_[0] for _ in head_id])
+        # print(_index)
+        adjacency_scores = torch.index_select(self._to_tensor(self.relation_predictor.adjacencyMatrix), 0,
+                                              self._to_tensor(_index))
+        adjacency_scores = self.relation_predictor.adjacencyHandler(adjacency_scores)
+        rel_scores = (rel_scores + adjacency_scores) / 2
+        # print(adjacency_scores)
         # relation的预测方式采用self.KG_embed.rel_embeddings.weight的线性组合，取sigmoid（scores）作为组合系数
 
         # print(predict_relation)
@@ -205,9 +233,17 @@ class QuestionAnswerModel(torch.nn.Module):
 
 
 def test():
-    a = QuestionAnswerModel(embed_model_path='checkpoint/rotatE.ckpt',
-                            bert_path="C:/Users/yeeeqichen/Desktop/语言模型/roberta-base", n_clusters=8)
-    print(a([[1, 2, 3, 0], [1, 1, 1, 0]], [[1, 2, 0, 0], [1, 1, 0, 0]], [[1], [2]]))
+    model = QuestionAnswerModel(embed_model_path='checkpoint/rotatE.ckpt',
+                            bert_path="C:/Users/yeeeqichen/Desktop/语言模型/roberta-base", n_clusters=8, fine_tune=False)
+    total_param = 0
+    for name, param in model.named_parameters():
+        num = 1
+        for size in param.shape:
+            num *= size
+        total_param += num
+        print("{:30s} : {}, require_grad: {}".format(name, param.shape, param.requires_grad))
+    print("total param num {}".format(total_param))
+    print(model([[1, 2, 3, 0], [1, 1, 1, 0]], [[1, 2, 0, 0], [1, 1, 0, 0]], [[1], [2]]))
 
 
 if __name__ == '__main__':
