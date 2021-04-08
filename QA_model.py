@@ -3,11 +3,30 @@ import logging
 from openke.module.model import RotatE, ComplEx
 from pytorch_transformers import RobertaModel
 from sklearn.cluster import KMeans
+import numpy as np
 logger = logging.getLogger(__name__)
 
 
+class CandidateGenerator:
+    def __init__(self, train2id):
+        self.candidate_entities = [[] for _ in range(43234)]
+        with open(train2id) as f:
+            for _, line in enumerate(f):
+                if _ == 0:
+                    continue
+                head, tail, relation = line.strip('\n').split(' ')
+                self.candidate_entities[int(head)].append((int(tail)))
+                self.candidate_entities[int(tail)].append((int(head)))
+        for i in range(43234):
+            self.candidate_entities[i] = sorted(list(set(self.candidate_entities[i])))
+        self.candidate_entities = np.array(self.candidate_entities)
+
+    def get_candidates(self, entity_id):
+        return self.candidate_entities[entity_id]
+
+
 class RelationPredictor(torch.nn.Module):
-    def __init__(self, bert_path, fine_tune=True):
+    def __init__(self, bert_path, fine_tune=True, attention=True):
         super(RelationPredictor, self).__init__()
         self.relation_names = []
         with open('./MetaQA/KGE_data/relation2id.txt') as f:
@@ -28,6 +47,7 @@ class RelationPredictor(torch.nn.Module):
         # print(self.adjacencyMatrix[3])
         # print(self.adjacencyMatrix[333])
         self.fine_tune = fine_tune
+        self.attention = attention
         logger.info('loading pretrained bert model...')
         self.question_embed = RobertaModel.from_pretrained(bert_path)
         if self.fine_tune:
@@ -35,6 +55,24 @@ class RelationPredictor(torch.nn.Module):
                 param.requires_grad = True
             self.hidden2rel = torch.nn.Linear(768, 18)
             torch.nn.init.xavier_uniform_(self.hidden2rel.weight)
+        elif self.attention:
+            for param in self.question_embed.parameters():
+                param.requires_grad = False
+            # self.attention_w = torch.nn.Linear(768, 1)
+            # self.tanh = torch.nn.Tanh()
+            self.hidden2rel = torch.nn.Sequential(
+                torch.nn.Linear(768, 256),
+                torch.nn.ReLU(),
+                torch.nn.Linear(256, 128),
+                torch.nn.ReLU(),
+                torch.nn.Linear(128, 18)
+            )
+            # self.hidden2rel = torch.nn.Linear(768, 18)
+            self.attention_key = torch.nn.Linear(768, 768)  # hello my name is yeeeeeqichen
+            self.attention_query = torch.nn.Linear(768, 768)  # I am a student from Peking Univ
+            self.attention_value = torch.nn.Linear(768, 768)  # and I like coding!!!!!
+            self.feed_forward = torch.nn.Linear(768, 768)
+            self.attention_scores = []
         else:
             for param in self.question_embed.parameters():
                 param.requires_grad = False
@@ -52,24 +90,54 @@ class RelationPredictor(torch.nn.Module):
         # self.dropout = torch.nn.Dropout(0.5)
 
     def forward(self, question_token_ids, question_masks):
-        question_embed = torch.mean(self.question_embed(input_ids=question_token_ids,
-                                                        attention_mask=question_masks)[0], dim=1)
+        if not self.attention:
+            question_embed = torch.mean(self.question_embed(input_ids=question_token_ids,
+                                                            attention_mask=question_masks)[0], dim=1)
 
-        # # [CLS]
-        # last_hidden_state = self.question_embed(input_ids=question_token_ids, attention_mask=question_masks)[0]
-        # question_embed = last_hidden_state.transpose(1, 0)[0]
-        # classification
+            # # [CLS]
+            # last_hidden_state = self.question_embed(input_ids=question_token_ids, attention_mask=question_masks)[0]
+            # question_embed = last_hidden_state.transpose(1, 0)[0]
+            # classification
+        else:
+            # (batch_size, sequence_length, hidden_size)
+            last_hidden_states = self.question_embed(input_ids=question_token_ids, attention_mask=question_masks)[0]
+            # (batch_size, sequence_length, 1)
+            # attention_weight = torch.softmax(self.tanh(self.attention_w(last_hidden_states)), dim=1)
+            # question_embed = torch.sum(last_hidden_states * attention_weight, dim=1)
+            query = self.attention_query(last_hidden_states)
+            key = self.attention_key(last_hidden_states)
+            value = self.attention_value(last_hidden_states)
+            # (batch_size, sequence_length, sequence_length)
+            energy = torch.matmul(query, key.transpose(-1, -2))
+            # print(question_masks)
+            attention_mask = (1.0 - question_masks.unsqueeze(1)) * -10000.0
+            # print(attention_mask)
+            prob = torch.softmax(energy + attention_mask, dim=-1)
+            # print(prob)
+            attention_output = torch.matmul(prob, value)
+
+            feed_forward_output = self.feed_forward(attention_output)
+
+            question_embed = torch.mean(attention_output + feed_forward_output, dim=1)
+
+            # self.attention_scores.append([question_token_ids, attention_weight])
+
+            # if len(self.attention_scores) > 1000:
+            #     print(self.attention_scores[-1])
+            #     self.attention_scores = []
+
         predict_rel = self.hidden2rel(question_embed)
         return predict_rel
 
 
 class QuestionAnswerModel(torch.nn.Module):
-    def __init__(self, embed_model_path, bert_path, n_clusters, embed_method='rotatE', fine_tune=True):
+    def __init__(self, embed_model_path, bert_path, n_clusters, embed_method='rotatE', fine_tune=True, attention=True):
         super(QuestionAnswerModel, self).__init__()
         self.embed_method = embed_method
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         logger.info('using device: {}'.format(self.device))
-        self.relation_predictor = RelationPredictor(bert_path=bert_path, fine_tune=fine_tune).to(self.device)
+        self.relation_predictor = RelationPredictor(bert_path=bert_path, fine_tune=fine_tune,
+                                                    attention=attention).to(self.device)
         if self.embed_method == 'rotatE':
             self.score_func = self.rotatE
             self.KG_embed = RotatE(
@@ -99,6 +167,7 @@ class QuestionAnswerModel(torch.nn.Module):
             self.cluster2ent = [[] for _ in range(n_clusters)]
             for idx, label in enumerate(self.cluster.fit_predict(self.KG_embed.ent_embeddings.weight.cpu())):
                 self.cluster2ent[label].append(idx)
+        self.candidate_generator = CandidateGenerator('./MetaQA/KGE_data/train2id.txt')
         # cnt = 0
         # for _ in self.cluster2ent:
         #     cnt += len(_)
@@ -179,7 +248,7 @@ class QuestionAnswerModel(torch.nn.Module):
     # 经实验 sigmoid效果最好
     def forward(self, question_token_ids, question_masks, head_id, use_cluster=False):
         rel_scores = self.relation_predictor(self._to_tensor(question_token_ids), self._to_tensor(question_masks))
-        _index = torch.tensor([_[0] for _ in head_id])
+        _index = [_[0] for _ in head_id]
         # print(_index)
         adjacency_scores = torch.index_select(self._to_tensor(self.relation_predictor.adjacencyMatrix), 0,
                                               self._to_tensor(_index))
@@ -205,6 +274,9 @@ class QuestionAnswerModel(torch.nn.Module):
         else:
             head_embed = self.KG_embed.ent_embeddings(self._to_tensor(head_id)).squeeze(1)
             predict_relation = torch.matmul(torch.sigmoid(rel_scores), self.KG_embed.rel_embeddings.weight)
+
+        # candidate_answers = list(self.candidate_generator.get_candidates(_index))
+        # print(_index, candidate_answers)
         indices = None
         if not use_cluster:
             if self.embed_method == 'complEx':
@@ -243,7 +315,7 @@ def test():
         total_param += num
         print("{:30s} : {}, require_grad: {}".format(name, param.shape, param.requires_grad))
     print("total param num {}".format(total_param))
-    print(model([[1, 2, 3, 0], [1, 1, 1, 0]], [[1, 2, 0, 0], [1, 1, 0, 0]], [[1], [2]]))
+    print(model([[1, 2, 3, 0], [1, 4, 0, 0]], [[1, 1, 1, 0], [1, 1, 0, 0]], [[1], [2]]))
 
 
 if __name__ == '__main__':

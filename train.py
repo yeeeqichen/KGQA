@@ -8,6 +8,7 @@ from pytorch_transformers import AdamW
 import os
 import time
 from graph_manager import MyGraph
+from negative_manager import NegativeManager
 import matplotlib.pyplot as plt
 
 parser = argparse.ArgumentParser()
@@ -41,13 +42,18 @@ parser.add_argument("--negative_sampling_size", type=int, default=25)
 parser.add_argument("--n_clusters", type=int, default=8)
 parser.add_argument("--use_cluster", action='store_true', default=False)
 parser.add_argument("--fine_tune", action="store_true", default=False)
+parser.add_argument("--negs_thresh_hold", type=int, default=15)
+parser.add_argument("--not_attention", action='store_true', default=False)
 
 
 args = parser.parse_args()
 
 save_path = os.getcwd() + args.save_path
+attention_save_path = save_path + '/attention'
 if not os.path.exists(save_path):
     os.makedirs(save_path)
+    os.makedirs(attention_save_path)
+
 
 logger = logging.getLogger(__name__)
 logger.setLevel(args.log_level)
@@ -62,6 +68,7 @@ fh.setFormatter(formatter)
 logger.addHandler(fh)
 
 graph = MyGraph()
+negative_manager = NegativeManager(thresh_hold=args.negs_thresh_hold)
 
 
 def train(model, data_loader):
@@ -93,11 +100,18 @@ def train(model, data_loader):
         graph.hits_3.append([])
         graph.hits_10.append([])
         total_norms = []
-        for question_token_ids, question_masks, head_id, answers_id, negative_ids \
+        for case_ids, question_token_ids, question_masks, head_id, answers_id, negative_ids \
                 in tqdm.tqdm(data_loader.batch_generator('train')):
             model.zero_grad()
             scores = model(question_token_ids, question_masks, head_id).cpu()
             cur_loss = []
+            # 一边搜集优质negative_sample，一边用negative_sample训练
+
+            # 先更新
+            negative_manager.step(scores, answers_id, case_ids)
+            # 后采样
+            negative_ids = negative_manager.get_negative_samples(case_ids)
+            # print(negative_ids)
             # 下面计算一个batch内的loss
             for score, answers, negatives in zip(scores, answers_id, negative_ids):
                 # 每次循环计算一个（h, r, t)的loss，分为positive和negative两部分
@@ -237,6 +251,13 @@ def train(model, data_loader):
                 plt.legend()
                 plt.savefig(save_path + '/positive_and_negative_loss{}.png'.format(i))
                 plt.close()
+                # _init_figure(title='attention_weights', x_label='question_tokens', y_label='weights')
+                # # [(batch_size, sequence_length), (batch_size, sequence_length)]
+                # target_data = [_[-1] for _ in model.relation_predictor.attention_scores[-1]]
+                # model.attention_scores = []
+                # plt.bar([i for i in range(args.seq_length)], target_data[1].detach().cpu().squeeze(1))
+                # plt.savefig(attention_save_path + '/EPOCH{}_steps{}.png'.format(i, steps))
+                # plt.close()
 
             steps += 1
     logger.info('finish training')
@@ -244,7 +265,7 @@ def train(model, data_loader):
 
 def main():
     embed_model_path = args.embed_model_path + args.embed_method + '.ckpt'
-    model = QuestionAnswerModel(embed_model_path=embed_model_path, embed_method=args.embed_method,
+    model = QuestionAnswerModel(embed_model_path=embed_model_path, embed_method=args.embed_method, attention=True,
                                 bert_path=args.bert_path, n_clusters=args.n_clusters, fine_tune=args.fine_tune)
     if args.continue_best_model:
         path = 'model/2021-03-17__13-05-53/model.pkl'

@@ -74,6 +74,7 @@ class DataLoader:
             question_masks = [_[1][1] for _ in temp]
             head_id = [_[2] for _ in temp]
             answers_id = [_[3] for _ in temp]
+            case_ids = [_ for _ in range(i * self.batch_size, i * self.batch_size + len(temp))]
             if purpose == 'train':
                 negative_samples = []
                 for _answers in answers_id:
@@ -85,7 +86,8 @@ class DataLoader:
                             temp.append(rand_int)
                     negative_samples.append(temp)
                 # print(answers_id, negative_samples)
-                yield question_token_ids, question_masks, head_id, answers_id, negative_samples
+                # print(case_ids)
+                yield case_ids, question_token_ids, question_masks, head_id, answers_id, negative_samples
             else:
                 yield question_token_ids, question_masks, head_id, answers_id
 
