@@ -1,7 +1,7 @@
 import torch
 import logging
 from openke.module.model import RotatE, ComplEx
-from pytorch_transformers import RobertaModel
+from pytorch_transformers import RobertaModel, BertModel
 from sklearn.cluster import KMeans
 import numpy as np
 logger = logging.getLogger(__name__)
@@ -26,7 +26,8 @@ class CandidateGenerator:
 
 
 class RelationPredictor(torch.nn.Module):
-    def __init__(self, bert_path, fine_tune=True, attention=True):
+    def __init__(self, bert_path, bert_name='roberta-base', fine_tune=True, attention=True,
+                 use_lstm=False, use_dnn=True, attention_method='self-attention'):
         super(RelationPredictor, self).__init__()
         self.relation_names = []
         with open('./MetaQA/KGE_data/relation2id.txt') as f:
@@ -46,36 +47,40 @@ class RelationPredictor(torch.nn.Module):
         self.adjacencyHandler = torch.nn.Linear(18, 18)
         # print(self.adjacencyMatrix[3])
         # print(self.adjacencyMatrix[333])
+        self.use_lstm = use_lstm
+        self.use_dnn = use_dnn
         self.fine_tune = fine_tune
         self.attention = attention
-        logger.info('loading pretrained bert model...')
-        self.question_embed = RobertaModel.from_pretrained(bert_path)
+        self.attention_method = attention_method
+        if self.use_lstm:
+            self.question_embed = torch.nn.Sequential(
+                torch.nn.Embedding(num_embeddings=50265, embedding_dim=256),
+                torch.nn.LSTM(input_size=256, hidden_size=768, num_layers=2, batch_first=True)
+            )
+        else:
+            logger.info('loading pretrained bert model...')
+            if bert_name == 'roberta-base':
+                self.question_embed = RobertaModel.from_pretrained(bert_path + bert_name)
+            elif bert_name == 'bert-base-uncased':
+                self.question_embed = BertModel.from_pretrained(bert_path + bert_name)
+            for param in self.question_embed.parameters():
+                param.requires_grad = False
         if self.fine_tune:
             for param in self.question_embed.parameters():
                 param.requires_grad = True
-            self.hidden2rel = torch.nn.Linear(768, 18)
-            torch.nn.init.xavier_uniform_(self.hidden2rel.weight)
-        elif self.attention:
-            for param in self.question_embed.parameters():
-                param.requires_grad = False
-            # self.attention_w = torch.nn.Linear(768, 1)
-            # self.tanh = torch.nn.Tanh()
-            self.hidden2rel = torch.nn.Sequential(
-                torch.nn.Linear(768, 256),
-                torch.nn.ReLU(),
-                torch.nn.Linear(256, 128),
-                torch.nn.ReLU(),
-                torch.nn.Linear(128, 18)
-            )
-            # self.hidden2rel = torch.nn.Linear(768, 18)
-            self.attention_key = torch.nn.Linear(768, 768)  # hello my name is yeeeeeqichen
-            self.attention_query = torch.nn.Linear(768, 768)  # I am a student from Peking Univ
-            self.attention_value = torch.nn.Linear(768, 768)  # and I like coding!!!!!
-            self.feed_forward = torch.nn.Linear(768, 768)
+        if self.attention:
+            if self.attention_method == 'self-attention':
+                self.attention_key = torch.nn.Linear(768, 768)
+                self.attention_query = torch.nn.Linear(768, 768)
+                self.attention_value = torch.nn.Linear(768, 768)
+                self.feed_forward = torch.nn.Linear(768, 768)
+            elif self.attention_method == 'mine':
+                self.attention_w = torch.nn.Linear(768, 1)
+                self.tanh = torch.nn.Tanh()
+            else:
+                raise Exception('attention method not specified!')
             self.attention_scores = []
-        else:
-            for param in self.question_embed.parameters():
-                param.requires_grad = False
+        if self.use_dnn:
             self.hidden2rel = torch.nn.Sequential(
                 torch.nn.Linear(768, 256),
                 torch.nn.ReLU(),
@@ -83,6 +88,8 @@ class RelationPredictor(torch.nn.Module):
                 torch.nn.ReLU(),
                 torch.nn.Linear(128, 18)
             )
+        else:
+            self.hidden2rel = torch.nn.Linear(768, 18)
         # self.classifier = torch.nn.Linear(768, 18)
         # torch.nn.init.normal_(self.classifier.weight, mean=0, std=1)
         # logger.info(self.classifier.weight)
@@ -90,54 +97,75 @@ class RelationPredictor(torch.nn.Module):
         # self.dropout = torch.nn.Dropout(0.5)
 
     def forward(self, question_token_ids, question_masks):
-        if not self.attention:
-            question_embed = torch.mean(self.question_embed(input_ids=question_token_ids,
-                                                            attention_mask=question_masks)[0], dim=1)
-
-            # # [CLS]
-            # last_hidden_state = self.question_embed(input_ids=question_token_ids, attention_mask=question_masks)[0]
-            # question_embed = last_hidden_state.transpose(1, 0)[0]
-            # classification
+        # if not self.attention:
+        #     question_embed = torch.mean(self.question_embed(input_ids=question_token_ids,
+        #                                                     attention_mask=question_masks)[0], dim=1)
+        #
+        #     # # [CLS]
+        #     # last_hidden_state = self.question_embed(input_ids=question_token_ids, attention_mask=question_masks)[0]
+        #     # question_embed = last_hidden_state.transpose(1, 0)[0]
+        #     # classification
+        # else:
+        # (batch_size, sequence_length, hidden_size)
+        if self.use_lstm:
+            last_hidden_states = self.question_embed(question_token_ids)[0]
         else:
-            # (batch_size, sequence_length, hidden_size)
             last_hidden_states = self.question_embed(input_ids=question_token_ids, attention_mask=question_masks)[0]
-            # (batch_size, sequence_length, 1)
-            # attention_weight = torch.softmax(self.tanh(self.attention_w(last_hidden_states)), dim=1)
-            # question_embed = torch.sum(last_hidden_states * attention_weight, dim=1)
-            query = self.attention_query(last_hidden_states)
-            key = self.attention_key(last_hidden_states)
-            value = self.attention_value(last_hidden_states)
-            # (batch_size, sequence_length, sequence_length)
-            energy = torch.matmul(query, key.transpose(-1, -2))
-            # print(question_masks)
-            attention_mask = (1.0 - question_masks.unsqueeze(1)) * -10000.0
-            # print(attention_mask)
-            prob = torch.softmax(energy + attention_mask, dim=-1)
-            # print(prob)
-            attention_output = torch.matmul(prob, value)
 
-            feed_forward_output = self.feed_forward(attention_output)
+        if self.attention:
+            if self.attention_method == 'mine':
+                # 第一种attention方法
+                # (batch_size, sequence_length, 1)
+                energy = self.attention_w(last_hidden_states)
+                # attention_mask = (1.0 - question_masks.unsqueeze(-1)) * -10000.0
+                attention_score = energy
+                # print(attention_score)
+                attention_weight = torch.softmax(attention_score, dim=1)
+                # print(attention_weight.shape, last_hidden_states.shape)
+                question_embed = torch.sum(last_hidden_states * attention_weight, dim=1)
 
-            question_embed = torch.mean(attention_output + feed_forward_output, dim=1)
+            # 第二种attention方法
+            elif self.attention_method == 'self-attention':
+                query = self.attention_query(last_hidden_states)
+                key = self.attention_key(last_hidden_states)
+                value = self.attention_value(last_hidden_states)
+                # (batch_size, sequence_length, sequence_length)
+                energy = torch.matmul(query, key.transpose(-1, -2))
+                # print(question_masks)
+                # attention_mask = (1.0 - question_masks.unsqueeze(1)) * -10000.0
+                # print(attention_mask)
+                prob = torch.softmax(energy, dim=-1)
+                # print(prob)
+                attention_output = torch.matmul(prob, value)
 
-            # self.attention_scores.append([question_token_ids, attention_weight])
+                feed_forward_output = self.feed_forward(attention_output)
 
-            # if len(self.attention_scores) > 1000:
-            #     print(self.attention_scores[-1])
-            #     self.attention_scores = []
+                question_embed = torch.mean(attention_output + feed_forward_output, dim=1)
+            else:
+                raise Exception('attention method not specified!')
+        else:
+            question_embed = torch.mean(last_hidden_states, dim=1)
+        # self.attention_scores.append([question_token_ids, attention_weight])
+
+        # if len(self.attention_scores) > 1000:
+        #     print(self.attention_scores[-1])
+        #     self.attention_scores = []
 
         predict_rel = self.hidden2rel(question_embed)
         return predict_rel
 
 
 class QuestionAnswerModel(torch.nn.Module):
-    def __init__(self, embed_model_path, bert_path, n_clusters, embed_method='rotatE', fine_tune=True, attention=True):
+    def __init__(self, embed_model_path, bert_path, bert_name, n_clusters, embed_method='rotatE',
+                 fine_tune=True, attention=True, use_lstm=False, use_dnn=True, attention_method='mine'):
         super(QuestionAnswerModel, self).__init__()
         self.embed_method = embed_method
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         logger.info('using device: {}'.format(self.device))
-        self.relation_predictor = RelationPredictor(bert_path=bert_path, fine_tune=fine_tune,
-                                                    attention=attention).to(self.device)
+        self.relation_predictor = RelationPredictor(bert_path=bert_path, bert_name=bert_name, fine_tune=fine_tune,
+                                                    attention=attention, use_lstm=use_lstm, use_dnn=use_dnn,
+                                                    attention_method=attention_method)\
+            .to(self.device)
         if self.embed_method == 'rotatE':
             self.score_func = self.rotatE
             self.KG_embed = RotatE(
@@ -305,8 +333,8 @@ class QuestionAnswerModel(torch.nn.Module):
 
 
 def test():
-    model = QuestionAnswerModel(embed_model_path='checkpoint/rotatE.ckpt',
-                            bert_path="C:/Users/yeeeqichen/Desktop/语言模型/roberta-base", n_clusters=8, fine_tune=False)
+    model = QuestionAnswerModel(embed_model_path='checkpoint/rotatE.ckpt', bert_name="roberta-base", use_lstm=True,
+                                bert_path="C:/Users/yeeeqichen/Desktop/语言模型/", n_clusters=8, fine_tune=False)
     total_param = 0
     for name, param in model.named_parameters():
         num = 1

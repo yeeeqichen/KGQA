@@ -1,4 +1,5 @@
 from pytorch_transformers import RobertaTokenizer
+from pytorch_transformers import BertTokenizer
 import re
 import tqdm
 import logging
@@ -8,14 +9,17 @@ logger = logging.getLogger(__name__)
 
 # train 一共96106句问答
 class DataLoader:
-    def __init__(self, train_file, valid_file, test_file, dict_path, bert_path,
+    def __init__(self, train_file, valid_file, test_file, dict_path, bert_path, bert_name,
                  batch_size=4, seq_length=20, negative_sample_rate=1.0, negative_sample_size=25):
         self.batch_size = batch_size
         self.negative_sampling_rate = negative_sample_rate
         self.negative_sampling_size = negative_sample_size
         self.seq_length = seq_length
         self.ent_dict = {}
-        self.tokenizer = RobertaTokenizer.from_pretrained(bert_path)
+        if bert_name == 'roberta-base':
+            self.tokenizer = RobertaTokenizer.from_pretrained(bert_path + bert_name)
+        elif bert_name == 'bert-base-uncased':
+            self.tokenizer = BertTokenizer.from_pretrained(bert_path + bert_name)
         logger.info('reading entity dict...')
         with open(dict_path) as f:
             for line in f:

@@ -13,7 +13,9 @@ import matplotlib.pyplot as plt
 
 parser = argparse.ArgumentParser()
 
-parser.add_argument("--bert_path", type=str, default="C:/Users/yeeeqichen/Desktop/语言模型/roberta-base")
+parser.add_argument("--bert_path", type=str, default="C:/Users/yeeeqichen/Desktop/语言模型/")
+parser.add_argument("--bert_name", type=str, default="roberta-base")
+parser.add_argument("--use_LSTM", action='store_true', default=False)
 parser.add_argument("--embed_model_path", type=str, default="./checkpoint/")
 parser.add_argument("--embed_method", type=str, default='rotatE')
 parser.add_argument("--train_file", type=str, default="./MetaQA/QA_data/qa_train_1hop.txt")
@@ -44,6 +46,8 @@ parser.add_argument("--use_cluster", action='store_true', default=False)
 parser.add_argument("--fine_tune", action="store_true", default=False)
 parser.add_argument("--negs_thresh_hold", type=int, default=15)
 parser.add_argument("--not_attention", action='store_true', default=False)
+parser.add_argument("--not_dnn", action='store_true', default=False)
+parser.add_argument("--attention_method", type=str, default='mine')
 
 
 args = parser.parse_args()
@@ -200,7 +204,7 @@ def train(model, data_loader):
                 graph.hits_3[i].append((steps, hits_3 / cnt))
                 graph.hits_10[i].append((steps, hits_10 / cnt))
                 # 依据验证集上的表现来调整学习率
-                scheduler.step(cur_performance['hits_1'])
+                # scheduler.step(cur_performance['hits_1'])
                 graph.lr.append((optimizer.param_groups[0]['lr'], optimizer.param_groups[1]['lr']))
                 if cur_performance['hits_1'] > best_performance['hits_1']:
                     best_performance = cur_performance
@@ -265,8 +269,10 @@ def train(model, data_loader):
 
 def main():
     embed_model_path = args.embed_model_path + args.embed_method + '.ckpt'
-    model = QuestionAnswerModel(embed_model_path=embed_model_path, embed_method=args.embed_method, attention=True,
-                                bert_path=args.bert_path, n_clusters=args.n_clusters, fine_tune=args.fine_tune)
+    model = QuestionAnswerModel(embed_model_path=embed_model_path, embed_method=args.embed_method,
+                                attention=not args.not_attention, bert_path=args.bert_path, bert_name=args.bert_name,
+                                n_clusters=args.n_clusters, fine_tune=args.fine_tune, use_lstm=args.use_LSTM,
+                                use_dnn=not args.not_dnn, attention_method=args.attention_method)
     if args.continue_best_model:
         path = 'model/2021-03-17__13-05-53/model.pkl'
         logger.info('continue training, loading model stat_dict from {}'.format(path))
@@ -287,6 +293,7 @@ def main():
         seq_length=args.seq_length,
         dict_path=args.dict_path,
         bert_path=args.bert_path,
+        bert_name=args.bert_name,
         negative_sample_rate=args.negative_sampling_rate,
         negative_sample_size=args.negative_sampling_size,
     )
