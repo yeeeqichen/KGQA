@@ -7,9 +7,11 @@ import tqdm
 from pytorch_transformers import AdamW
 import os
 import time
+import json
 from graph_manager import MyGraph
 from negative_manager import NegativeManager
 import matplotlib.pyplot as plt
+import numpy as np
 
 parser = argparse.ArgumentParser()
 
@@ -48,16 +50,20 @@ parser.add_argument("--negs_thresh_hold", type=int, default=15)
 parser.add_argument("--not_attention", action='store_true', default=False)
 parser.add_argument("--not_dnn", action='store_true', default=False)
 parser.add_argument("--attention_method", type=str, default='mine')
+parser.add_argument("--caching", action='store_true', default=False)
+parser.add_argument("--use_cache", action='store_true', default=False)
 
 
 args = parser.parse_args()
 
 save_path = os.getcwd() + args.save_path
 attention_save_path = save_path + '/attention'
+cache_path = os.getcwd() + '/cache/'
 if not os.path.exists(save_path):
     os.makedirs(save_path)
     os.makedirs(attention_save_path)
-
+if not os.path.exists(cache_path):
+    os.makedirs(cache_path)
 
 logger = logging.getLogger(__name__)
 logger.setLevel(args.log_level)
@@ -104,10 +110,10 @@ def train(model, data_loader):
         graph.hits_3.append([])
         graph.hits_10.append([])
         total_norms = []
-        for case_ids, question_token_ids, question_masks, head_id, answers_id, negative_ids \
-                in tqdm.tqdm(data_loader.batch_generator('train')):
+        for case_ids, question_token_ids, question_masks, last_hidden_states, head_id, answers_id, negative_ids \
+                in tqdm.tqdm(data_loader.batch_generator('train', cache=args.use_cache)):
             model.zero_grad()
-            scores = model(question_token_ids, question_masks, head_id).cpu()
+            scores = model(question_token_ids, question_masks, head_id, last_hidden_states).cpu()
             cur_loss = []
             # 一边搜集优质negative_sample，一边用negative_sample训练
 
@@ -267,12 +273,52 @@ def train(model, data_loader):
     logger.info('finish training')
 
 
+def caching(model, data_loader):
+    question_embeddings = None
+    steps = 0
+    heads = None
+    answers = {}
+    for case_ids, question_token_ids, question_masks, head_id, answers_id, _ \
+            in tqdm.tqdm(data_loader.batch_generator('train')):
+        # (batch_size, sequence_length, hidden_size)
+        if heads is None:
+            heads = np.array(head_id)
+        else:
+            heads = np.vstack((heads, np.array(head_id)))
+        for _id, _answers in zip(case_ids, answers_id):
+            answers[_id] = _answers
+        last_hidden_states = model.encode_question(question_token_ids, question_masks).detach().cpu().numpy()
+        if question_embeddings is None:
+            question_embeddings = last_hidden_states
+        else:
+            question_embeddings = np.vstack((question_embeddings, last_hidden_states))
+        steps += 1
+        if steps % 2000 == 0:
+            print(question_embeddings.shape)
+            np.save(cache_path + 'question_embeddings{}.npy'.format(steps // 2000), question_embeddings)
+            question_embeddings = None
+    print(question_embeddings.shape)
+    if question_embeddings is not None:
+        np.save(cache_path + 'question_embeddings{}.npy'.format(steps // 2000 + 1), question_embeddings)
+    print(heads.shape)
+    print(len(answers))
+    np.save(cache_path + 'heads', heads)
+    with open(cache_path + 'answers', 'w') as f:
+        json.dump(answers, f)
+
+
 def main():
     embed_model_path = args.embed_model_path + args.embed_method + '.ckpt'
-    model = QuestionAnswerModel(embed_model_path=embed_model_path, embed_method=args.embed_method,
-                                attention=not args.not_attention, bert_path=args.bert_path, bert_name=args.bert_name,
-                                n_clusters=args.n_clusters, fine_tune=args.fine_tune, use_lstm=args.use_LSTM,
-                                use_dnn=not args.not_dnn, attention_method=args.attention_method)
+    model = QuestionAnswerModel(embed_model_path=embed_model_path,
+                                embed_method=args.embed_method,
+                                attention=not args.not_attention,
+                                bert_path=args.bert_path,
+                                bert_name=args.bert_name,
+                                n_clusters=args.n_clusters,
+                                fine_tune=args.fine_tune,
+                                use_lstm=args.use_LSTM,
+                                use_dnn=not args.not_dnn,
+                                attention_method=args.attention_method)
     if args.continue_best_model:
         path = 'model/2021-03-17__13-05-53/model.pkl'
         logger.info('continue training, loading model stat_dict from {}'.format(path))
@@ -298,7 +344,10 @@ def main():
         negative_sample_size=args.negative_sampling_size,
     )
     model.to(model.device)
-    train(model, data_loader)
+    if args.caching:
+        caching(model, data_loader)
+    else:
+        train(model, data_loader)
 
 
 if __name__ == '__main__':

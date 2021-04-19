@@ -1,6 +1,6 @@
 import torch
 import logging
-from openke.module.model import RotatE, ComplEx
+from openke.module.model import RotatE, ComplEx, DistMult, TransE
 from pytorch_transformers import RobertaModel, BertModel
 from sklearn.cluster import KMeans
 import numpy as np
@@ -25,8 +25,38 @@ class CandidateGenerator:
         return self.candidate_entities[entity_id]
 
 
+class QuestionEmbeddingModule(torch.nn.Module):
+    def __init__(self, bert_path, bert_name='roberta-base', fine_tune=False, use_lstm=False):
+        super(QuestionEmbeddingModule, self).__init__()
+        self.use_lstm = use_lstm
+        self.bert_name = bert_name
+        if self.use_lstm:
+            self.question_embed = torch.nn.Sequential(
+                torch.nn.Embedding(num_embeddings=50265, embedding_dim=256),
+                torch.nn.LSTM(input_size=256, hidden_size=768, num_layers=2, batch_first=True)
+            )
+        else:
+            logger.info('loading pretrained bert model from {}'.format(bert_path + bert_name))
+            if self.bert_name == 'roberta-base':
+                self.question_embed = RobertaModel.from_pretrained(bert_path + bert_name)
+            elif self.bert_name == 'bert-base-uncased':
+                self.question_embed = BertModel.from_pretrained(bert_path + bert_name)
+            else:
+                raise Exception('bert model unspecified!')
+            if not fine_tune:
+                for param in self.question_embed.parameters():
+                    param.requires_grad = False
+
+    def forward(self, question_token_ids, question_masks):
+        if self.use_lstm:
+            last_hidden_states = self.question_embed(question_token_ids)[0]
+        else:
+            last_hidden_states = self.question_embed(input_ids=question_token_ids, attention_mask=question_masks)[0]
+        return last_hidden_states
+
+
 class RelationPredictor(torch.nn.Module):
-    def __init__(self, bert_path, bert_name='roberta-base', fine_tune=True, attention=True,
+    def __init__(self, bert_path, bert_name='roberta-base', fine_tune=False, attention=True,
                  use_lstm=False, use_dnn=True, attention_method='self-attention'):
         super(RelationPredictor, self).__init__()
         self.relation_names = []
@@ -45,29 +75,13 @@ class RelationPredictor(torch.nn.Module):
                 head, tail, relation = line.strip('\n').split(' ')
                 self.adjacencyMatrix[int(head)][int(relation)] = 1.
         self.adjacencyHandler = torch.nn.Linear(18, 18)
-        # print(self.adjacencyMatrix[3])
-        # print(self.adjacencyMatrix[333])
-        self.use_lstm = use_lstm
+        self.question_embed = QuestionEmbeddingModule(bert_path=bert_path,
+                                                      bert_name=bert_name,
+                                                      fine_tune=fine_tune,
+                                                      use_lstm=use_lstm)
         self.use_dnn = use_dnn
-        self.fine_tune = fine_tune
         self.attention = attention
         self.attention_method = attention_method
-        if self.use_lstm:
-            self.question_embed = torch.nn.Sequential(
-                torch.nn.Embedding(num_embeddings=50265, embedding_dim=256),
-                torch.nn.LSTM(input_size=256, hidden_size=768, num_layers=2, batch_first=True)
-            )
-        else:
-            logger.info('loading pretrained bert model...')
-            if bert_name == 'roberta-base':
-                self.question_embed = RobertaModel.from_pretrained(bert_path + bert_name)
-            elif bert_name == 'bert-base-uncased':
-                self.question_embed = BertModel.from_pretrained(bert_path + bert_name)
-            for param in self.question_embed.parameters():
-                param.requires_grad = False
-        if self.fine_tune:
-            for param in self.question_embed.parameters():
-                param.requires_grad = True
         if self.attention:
             if self.attention_method == 'self-attention':
                 self.attention_key = torch.nn.Linear(768, 768)
@@ -96,21 +110,13 @@ class RelationPredictor(torch.nn.Module):
         # self.relu = torch.nn.ReLU()
         # self.dropout = torch.nn.Dropout(0.5)
 
-    def forward(self, question_token_ids, question_masks):
-        # if not self.attention:
-        #     question_embed = torch.mean(self.question_embed(input_ids=question_token_ids,
-        #                                                     attention_mask=question_masks)[0], dim=1)
-        #
-        #     # # [CLS]
-        #     # last_hidden_state = self.question_embed(input_ids=question_token_ids, attention_mask=question_masks)[0]
-        #     # question_embed = last_hidden_state.transpose(1, 0)[0]
-        #     # classification
-        # else:
-        # (batch_size, sequence_length, hidden_size)
-        if self.use_lstm:
-            last_hidden_states = self.question_embed(question_token_ids)[0]
-        else:
-            last_hidden_states = self.question_embed(input_ids=question_token_ids, attention_mask=question_masks)[0]
+    def encode_question_for_caching(self, question_token_ids, question_masks):
+        last_hidden_states = self.question_embed(question_token_ids, question_masks)
+        return last_hidden_states
+
+    def forward(self, question_token_ids, question_masks, last_hidden_states=None):
+        if last_hidden_states is None:
+            last_hidden_states = self.question_embed(question_token_ids, question_masks)
 
         if self.attention:
             if self.attention_method == 'mine':
@@ -180,7 +186,23 @@ class QuestionAnswerModel(torch.nn.Module):
             self.KG_embed = ComplEx(
                 ent_tot=43234,
                 rel_tot=18,
-                dim=256
+                dim=200
+            )
+        elif self.embed_method == 'DistMult':
+            self.score_func = None
+            self.KG_embed = DistMult(
+                ent_tot=43234,
+                rel_tot=18,
+                dim=200
+            )
+        elif self.embed_method == 'TransE':
+            self.score_func = None
+            self.KG_embed = TransE(
+                ent_tot=43234,
+                rel_tot=18,
+                dim=200,
+                p_norm=1,
+                norm_flag=True
             )
         else:
             exit(1)
@@ -273,9 +295,20 @@ class QuestionAnswerModel(torch.nn.Module):
         # (batch_size, ent_tot)
         return self.KG_embed.margin - score
 
+    def encode_question(self, question_token_ids, question_masks):
+        return self.relation_predictor.encode_question_for_caching(
+            self._to_tensor(question_token_ids),
+            self._to_tensor(question_masks)
+        )
+
     # 经实验 sigmoid效果最好
-    def forward(self, question_token_ids, question_masks, head_id, use_cluster=False):
-        rel_scores = self.relation_predictor(self._to_tensor(question_token_ids), self._to_tensor(question_masks))
+    def forward(self, question_token_ids, question_masks, head_id, last_hidden_states=None, use_cluster=False):
+        if last_hidden_states is None:
+            rel_scores = self.relation_predictor(self._to_tensor(question_token_ids),
+                                                 self._to_tensor(question_masks),
+                                                 None)
+        else:
+            rel_scores = self.relation_predictor(None, None, self._to_tensor(last_hidden_states))
         _index = [_[0] for _ in head_id]
         # print(_index)
         adjacency_scores = torch.index_select(self._to_tensor(self.relation_predictor.adjacencyMatrix), 0,
@@ -333,7 +366,7 @@ class QuestionAnswerModel(torch.nn.Module):
 
 
 def test():
-    model = QuestionAnswerModel(embed_model_path='checkpoint/rotatE.ckpt', bert_name="roberta-base", use_lstm=True,
+    model = QuestionAnswerModel(embed_model_path='checkpoint/rotatE.ckpt', bert_name="roberta-base", use_lstm=False,
                                 bert_path="C:/Users/yeeeqichen/Desktop/语言模型/", n_clusters=8, fine_tune=False)
     total_param = 0
     for name, param in model.named_parameters():

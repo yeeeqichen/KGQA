@@ -4,6 +4,9 @@ import re
 import tqdm
 import logging
 import random
+import os
+import numpy as np
+import json
 logger = logging.getLogger(__name__)
 
 
@@ -62,7 +65,27 @@ class DataLoader:
                 corpus.append([new_question, [token_ids, mask], head_id, answers_id])
         return corpus
 
-    def batch_generator(self, purpose):
+    def batch_generator(self, purpose, cache=False):
+        last_hidden_states = None
+        answers = None
+        heads = None
+        if purpose == 'train' and cache:
+            cache_path = './cache/'
+            for file_name in os.listdir(cache_path):
+                cache_file = cache_path + file_name
+                if file_name == 'answers':
+                    answers = list(json.load(open(cache_file)).values())
+                    # print(len(answers))
+                elif file_name == 'heads.npy':
+                    heads = np.load(cache_file)
+                    # print(heads.shape)
+                else:
+                    if last_hidden_states is None:
+                        last_hidden_states = np.load(cache_file)
+                    else:
+                        last_hidden_states = np.vstack((last_hidden_states, np.load(cache_file)))
+            # print(last_hidden_states.shape)
+
         if purpose == 'train':
             corpus = self.train_corpus
             steps = self.total_train_instances // self.batch_size
@@ -73,12 +96,21 @@ class DataLoader:
             corpus = self.test_corpus
             steps = self.total_test_instances // self.batch_size
         for i in range(steps):
-            temp = corpus[i * self.batch_size: (i + 1) * self.batch_size]
-            question_token_ids = [_[1][0] for _ in temp]
-            question_masks = [_[1][1] for _ in temp]
-            head_id = [_[2] for _ in temp]
-            answers_id = [_[3] for _ in temp]
-            case_ids = [_ for _ in range(i * self.batch_size, i * self.batch_size + len(temp))]
+            if not cache:
+                temp = corpus[i * self.batch_size: (i + 1) * self.batch_size]
+                question_token_ids = [_[1][0] for _ in temp]
+                question_masks = [_[1][1] for _ in temp]
+                head_id = [_[2] for _ in temp]
+                answers_id = [_[3] for _ in temp]
+                case_ids = [_ for _ in range(i * self.batch_size, i * self.batch_size + len(temp))]
+                _hidden_states = None
+            else:
+                _hidden_states = last_hidden_states[i * self.batch_size: (i + 1) * self.batch_size]
+                head_id = heads[i * self.batch_size: (i + 1) * self.batch_size]
+                answers_id = answers[i * self.batch_size: (i + 1) * self.batch_size]
+                case_ids = [_ for _ in range(i * self.batch_size, i * self.batch_size + len(_hidden_states))]
+                question_token_ids = None
+                question_masks = None
             if purpose == 'train':
                 negative_samples = []
                 for _answers in answers_id:
@@ -91,7 +123,8 @@ class DataLoader:
                     negative_samples.append(temp)
                 # print(answers_id, negative_samples)
                 # print(case_ids)
-                yield case_ids, question_token_ids, question_masks, head_id, answers_id, negative_samples
+                yield case_ids, question_token_ids, question_masks, _hidden_states, head_id, answers_id,\
+                    negative_samples
             else:
                 yield question_token_ids, question_masks, head_id, answers_id
 
@@ -99,8 +132,8 @@ class DataLoader:
 def test():
     a = DataLoader('./MetaQA/QA_data/qa_train_1hop.txt', './MetaQA/QA_data/qa_dev_1hop.txt',
                    './MetaQA/QA_data/qa_test_1hop.txt', dict_path='./MetaQA/QA_data/entities.dict',
-                   bert_path='C:/Users/yeeeqichen/Desktop/语言模型/roberta-base')
-    for batch in a.batch_generator(purpose='train'):
+                   bert_path='C:/Users/yeeeqichen/Desktop/语言模型/', bert_name='roberta-base')
+    for batch in a.batch_generator(purpose='train', cache=True):
         _, _, _, positive, negative = batch
         # assert len(positive) == len(negative)
         # for i, j in zip(negative, positive):

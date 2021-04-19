@@ -23,6 +23,10 @@
 
 2021/4/8: 实现self attention方法
 
+2021/4/13: 完成中期报告
+
+2021/4/15: 使用cache，支持更大的batch_size,加速实验
+
 
 接下来工作：（1）规划一下接下来的实验，有计划的搜集实验数据
           （2）增加对答案的rerank，看能不能提升表现
@@ -69,14 +73,20 @@ roberta(freeze) + Attention* + DNN          Hits_1: 0.7692153722978383, Hits_3: 
 roberta(freeze) + Self Attention + DNN      Hits_1: 0.7453963170536431, Hits_3: 0.8694955964771818, Hist_10: 0.9413530824659728
 
 bert(fine-tune):
-bert(freeze) + DNN:
-bert(freeze) + Attention* + DNN             Hits_1: 0.7369895916733387, Hits_3: 0.8582866293034428, Hist_10: 0.9397518014411529
-bert(freeze) + Self Attention + DNN         Hits_1: 0.7377902321857486, Hits_3: 0.844675740592474, Hist_10: 0.9153322658126501
+bert(freeze) + DNN:                         Hits_1: 0.7473979183346677, Hits_3: 0.8694955964771818, Hist_10: 0.9421537229783827
+bert(freeze) + Attention* + DNN             Hits_1: 0.7593074459567654, Hits_3: 0.8730984787830264, Hist_10: 0.9402522017614091
+bert(freeze) + Self Attention + DNN         Hits_1: 0.7822257806244995, Hits_3: 0.8884107285828663, Hist_10: 0.9479583666933546
 
 LSTM(2-layer, 单向, 下同):                   Hits_1: 0.7426941553242594, Hits_3: 0.8561849479583667, Hist_10: 0.9299439551641313
 LSTM + DNN:                                 Hits_1: 0.7690152121697358, Hits_3: 0.883706965572458,  Hist_10: 0.9466573258606885
 LSTM + Attention* + DNN
 LSTM + Self Attention + DNN                 Hits_1: 0.7315852682145717, Hits_3: 0.8576861489191353, Hist_10: 0.9342473979183347
+
+下面这些实验其余条件考虑设置为LSTM + DNN
+RotateE + ...                               Hits_1: 0.7822257806244995, Hits_3: 0.8884107285828663, Hist_10: 0.9479583666933546
+ComplEx + ...                               Hits_1: 0.18885108086469177, Hits_3: 0.3925140112089672, Hist_10: 0.6015812650120096
+DistMult + ...
+TransE + ...
 
 
 
