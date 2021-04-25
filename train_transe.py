@@ -38,9 +38,9 @@ model = NegativeSampling(
 # train the model
 trainer = Trainer(model = model, data_loader = train_dataloader, train_times = 1000, alpha = 1.0, use_gpu = True)
 trainer.run()
-transe.save_checkpoint('./checkpoint/transe.ckpt')
+transe.save_checkpoint('./checkpoint/TransE.ckpt')
 
 # test the model
-transe.load_checkpoint('./checkpoint/transe.ckpt')
+transe.load_checkpoint('./checkpoint/TransE.ckpt')
 tester = Tester(model = transe, data_loader = test_dataloader, use_gpu = True)
 tester.run_link_prediction(type_constrain = False)

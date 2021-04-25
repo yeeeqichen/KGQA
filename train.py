@@ -52,6 +52,8 @@ parser.add_argument("--not_dnn", action='store_true', default=False)
 parser.add_argument("--attention_method", type=str, default='mine')
 parser.add_argument("--caching", action='store_true', default=False)
 parser.add_argument("--use_cache", action='store_true', default=False)
+parser.add_argument("--num_layers", type=int, default=2)
+parser.add_argument("--bidirectional", action='store_true', default=False)
 
 
 args = parser.parse_args()
@@ -318,7 +320,9 @@ def main():
                                 fine_tune=args.fine_tune,
                                 use_lstm=args.use_LSTM,
                                 use_dnn=not args.not_dnn,
-                                attention_method=args.attention_method)
+                                attention_method=args.attention_method,
+                                num_layers=args.num_layers,
+                                bidirectional=args.bidirectional)
     if args.continue_best_model:
         path = 'model/2021-03-17__13-05-53/model.pkl'
         logger.info('continue training, loading model stat_dict from {}'.format(path))

@@ -4,6 +4,7 @@ from openke.module.model import RotatE, ComplEx, DistMult, TransE
 from pytorch_transformers import RobertaModel, BertModel
 from sklearn.cluster import KMeans
 import numpy as np
+import torch.nn.functional as F
 logger = logging.getLogger(__name__)
 
 
@@ -26,14 +27,24 @@ class CandidateGenerator:
 
 
 class QuestionEmbeddingModule(torch.nn.Module):
-    def __init__(self, bert_path, bert_name='roberta-base', fine_tune=False, use_lstm=False):
+    def __init__(self,
+                 bert_path,
+                 bert_name='roberta-base',
+                 fine_tune=False,
+                 use_lstm=False,
+                 num_layers=2,
+                 bidirectional=False):
         super(QuestionEmbeddingModule, self).__init__()
         self.use_lstm = use_lstm
         self.bert_name = bert_name
         if self.use_lstm:
             self.question_embed = torch.nn.Sequential(
                 torch.nn.Embedding(num_embeddings=50265, embedding_dim=256),
-                torch.nn.LSTM(input_size=256, hidden_size=768, num_layers=2, batch_first=True)
+                torch.nn.LSTM(input_size=256,
+                              hidden_size=768,
+                              num_layers=num_layers,
+                              bidirectional=bidirectional,
+                              batch_first=True)
             )
         else:
             logger.info('loading pretrained bert model from {}'.format(bert_path + bert_name))
@@ -56,8 +67,15 @@ class QuestionEmbeddingModule(torch.nn.Module):
 
 
 class RelationPredictor(torch.nn.Module):
-    def __init__(self, bert_path, bert_name='roberta-base', fine_tune=False, attention=True,
-                 use_lstm=False, use_dnn=True, attention_method='self-attention'):
+    def __init__(self, bert_path,
+                 bert_name='roberta-base',
+                 fine_tune=False,
+                 attention=True,
+                 use_lstm=False,
+                 use_dnn=True,
+                 attention_method='self-attention',
+                 num_layers=2,
+                 bidirectional=False):
         super(RelationPredictor, self).__init__()
         self.relation_names = []
         with open('./MetaQA/KGE_data/relation2id.txt') as f:
@@ -78,7 +96,9 @@ class RelationPredictor(torch.nn.Module):
         self.question_embed = QuestionEmbeddingModule(bert_path=bert_path,
                                                       bert_name=bert_name,
                                                       fine_tune=fine_tune,
-                                                      use_lstm=use_lstm)
+                                                      use_lstm=use_lstm,
+                                                      num_layers=num_layers,
+                                                      bidirectional=bidirectional)
         self.use_dnn = use_dnn
         self.attention = attention
         self.attention_method = attention_method
@@ -162,16 +182,33 @@ class RelationPredictor(torch.nn.Module):
 
 
 class QuestionAnswerModel(torch.nn.Module):
-    def __init__(self, embed_model_path, bert_path, bert_name, n_clusters, embed_method='rotatE',
-                 fine_tune=True, attention=True, use_lstm=False, use_dnn=True, attention_method='mine'):
+    def __init__(self,
+                 embed_model_path,
+                 bert_path,
+                 bert_name,
+                 n_clusters,
+                 embed_method='rotatE',
+                 fine_tune=True,
+                 attention=True,
+                 use_lstm=False,
+                 use_dnn=True,
+                 attention_method='mine',
+                 num_layers=2,
+                 bidirectional=False):
         super(QuestionAnswerModel, self).__init__()
         self.embed_method = embed_method
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         logger.info('using device: {}'.format(self.device))
-        self.relation_predictor = RelationPredictor(bert_path=bert_path, bert_name=bert_name, fine_tune=fine_tune,
-                                                    attention=attention, use_lstm=use_lstm, use_dnn=use_dnn,
-                                                    attention_method=attention_method)\
-            .to(self.device)
+        self.relation_predictor = RelationPredictor(bert_path=bert_path,
+                                                    bert_name=bert_name,
+                                                    fine_tune=fine_tune,
+                                                    attention=attention,
+                                                    use_lstm=use_lstm,
+                                                    use_dnn=use_dnn,
+                                                    attention_method=
+                                                    attention_method,
+                                                    num_layers=num_layers,
+                                                    bidirectional=bidirectional).to(self.device)
         if self.embed_method == 'rotatE':
             self.score_func = self.rotatE
             self.KG_embed = RotatE(
@@ -189,14 +226,14 @@ class QuestionAnswerModel(torch.nn.Module):
                 dim=200
             )
         elif self.embed_method == 'DistMult':
-            self.score_func = None
+            self.score_func = self.DistMult
             self.KG_embed = DistMult(
                 ent_tot=43234,
                 rel_tot=18,
                 dim=200
             )
         elif self.embed_method == 'TransE':
-            self.score_func = None
+            self.score_func = self.TransE
             self.KG_embed = TransE(
                 ent_tot=43234,
                 rel_tot=18,
@@ -205,7 +242,7 @@ class QuestionAnswerModel(torch.nn.Module):
                 norm_flag=True
             )
         else:
-            exit(1)
+            raise Exception('embed method not specified!')
         self.embed_model_path = embed_model_path
         self.KG_embed.load_checkpoint(self.embed_model_path)
         self.KG_embed.to(self.device)
@@ -258,6 +295,34 @@ class QuestionAnswerModel(torch.nn.Module):
         score = torch.sum(re_head * re_tail * re_relation + im_head * im_tail * re_relation +
                           re_head * im_tail * im_relation - im_head * re_tail * im_relation, -1)
         # (batch_size, target_size)
+        # print(score.shape)
+        return score
+
+    def TransE(self, head, relation, tail):
+        batch_size = head.shape[0]
+        target_size = tail.shape[0]
+        if self.KG_embed.norm_flag:
+            head = F.normalize(head, 2, -1)
+            relation = F.normalize(relation, 2, -1)
+            tail = F.normalize(tail, 2, -1)
+        # print(head.shape, tail.shape)
+        head = head.unsqueeze(0).expand(target_size, -1, -1).permute(1, 0, 2)
+        relation = relation.unsqueeze(0).expand(target_size, -1, -1).permute(1, 0, 2)
+        tail = tail.unsqueeze(0).expand(batch_size, -1, -1)
+        # print(head.shape, tail.shape)
+        score = head + relation - tail
+        score = torch.norm(score, self.KG_embed.p_norm, -1)
+        # print(score.shape)
+        return -score
+
+    def DistMult(self, head, relation, tail):
+        batch_size = head.shape[0]
+        target_size = tail.shape[0]
+        head = head.unsqueeze(0).expand(target_size, -1, -1).permute(1, 0, 2)
+        relation = relation.unsqueeze(0).expand(target_size, -1, -1).permute(1, 0, 2)
+        tail = tail.unsqueeze(0).expand(batch_size, -1, -1)
+        score = (head * relation) * tail
+        score = torch.sum(score, dim=-1)
         # print(score.shape)
         return score
 
@@ -366,7 +431,8 @@ class QuestionAnswerModel(torch.nn.Module):
 
 
 def test():
-    model = QuestionAnswerModel(embed_model_path='checkpoint/rotatE.ckpt', bert_name="roberta-base", use_lstm=False,
+    model = QuestionAnswerModel(embed_model_path='checkpoint/TransE.ckpt', embed_method='DistMult',
+                                bert_name="roberta-base", use_lstm=False,
                                 bert_path="C:/Users/yeeeqichen/Desktop/语言模型/", n_clusters=8, fine_tune=False)
     total_param = 0
     for name, param in model.named_parameters():
