@@ -69,9 +69,9 @@ no type constraint results:     metric:                  MRR             MR     
 roberta(fine-tune):                         Hits_1: 0.7364891913530824, Hits_3: 0.8668935148118495, Hist_10: 0.9367493995196157
 roberta(fine-tune) + DNN:                   Hits_1: 0.7365892714171337, Hits_3: 0.8676941553242594, Hist_10: 0.9377502001601281
 roberta(freeze) + DNN:                      Hits_1: 0.7556044835868695, Hits_3: 0.8722978382706165, Hist_10: 0.9412530024019216
-这三个对比可见DNN对该模型的表现具有促进作用，并且fine-tune语言模型引入过多参数和负担，现有的计算条件下无法满足
-roberta(freeze) + Attention*
-roberta(freeze) + Self Attention
+roberta(fine-tune) + Attention*             Hits_1: 0.7391857485988791, Hits_3: 0.847177742193755, Hist_10: 0.9195356285028022
+roberta(fine-tune) + Self Attention         Hits_1: 0.7272818254603683, Hits_3: 0.8450760608486789, Hist_10: 0.9211369095276221
+这几个对比可见DNN、Attention对该模型的表现具有促进作用，并且fine-tune语言模型引入过多参数和负担，现有的计算条件下无法满足
 roberta(freeze) + Attention* + DNN          Hits_1: 0.7692153722978383, Hits_3: 0.8872097678142514, Hist_10: 0.9464571657325861
 roberta(freeze) + Self Attention + DNN      Hits_1: 0.7453963170536431, Hits_3: 0.8694955964771818, Hist_10: 0.9413530824659728
 
@@ -82,11 +82,11 @@ bert(freeze) + Self Attention + DNN         Hits_1: 0.7822257806244995, Hits_3: 
 
 LSTM(2-layer, 单向, 下同):                   Hits_1: 0.7426941553242594, Hits_3: 0.8561849479583667, Hist_10: 0.9299439551641313
 LSTM + DNN:                                 Hits_1: 0.7690152121697358, Hits_3: 0.883706965572458,  Hist_10: 0.9466573258606885
-LSTM + Attention* + DNN
+LSTM + Attention* + DNN                     Hits_1: 0.7464971977582066, Hits_3: 0.881204963971177, Hist_10: 0.9512610088070457
 LSTM + Self Attention + DNN                 Hits_1: 0.7315852682145717, Hits_3: 0.8576861489191353, Hist_10: 0.9342473979183347
 
 LSTM(2-layer, 双向) + Self Attention + DNN
-LSTM(4-layer, 单向) + Self Attention + DNN
+LSTM(4-layer, 单向) + DNN                    Hits_1: 0.7494995996797438, Hits_3: 0.8648919135308246, Hist_10: 0.9365492393915132
 
 RotateE + ...                               Hits_1: 0.7822257806244995, Hits_3: 0.8884107285828663, Hist_10: 0.9479583666933546
 ComplEx + ...                               Hits_1: 0.18885108086469177, Hits_3: 0.3925140112089672, Hist_10: 0.6015812650120096
