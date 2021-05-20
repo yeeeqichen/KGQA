@@ -366,6 +366,12 @@ class QuestionAnswerModel(torch.nn.Module):
             self._to_tensor(question_masks)
         )
 
+    def predict(self, question_token_ids, question_masks, head_id):
+        scores = self.forward(question_token_ids, question_masks, head_id)
+        predicts = torch.sort(scores.cpu(), dim=1, descending=True).indices
+        # print(predicts.shape)
+        return predicts
+
     # 经实验 sigmoid效果最好
     def forward(self, question_token_ids, question_masks, head_id, last_hidden_states=None, use_cluster=False):
         if last_hidden_states is None:

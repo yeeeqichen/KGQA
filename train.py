@@ -54,6 +54,7 @@ parser.add_argument("--caching", action='store_true', default=False)
 parser.add_argument("--use_cache", action='store_true', default=False)
 parser.add_argument("--num_layers", type=int, default=2)
 parser.add_argument("--bidirectional", action='store_true', default=False)
+parser.add_argument("--not_NS", action='store_true', default=False)
 
 
 args = parser.parse_args()
@@ -117,27 +118,28 @@ def train(model, data_loader):
             model.zero_grad()
             scores = model(question_token_ids, question_masks, head_id, last_hidden_states).cpu()
             cur_loss = []
-            # 一边搜集优质negative_sample，一边用negative_sample训练
-
-            # 先更新
-            negative_manager.step(scores, answers_id, case_ids)
-            # 后采样
-            negative_ids = negative_manager.get_negative_samples(case_ids)
+            if not args.not_NS:
+                # 一边搜集优质negative_sample，一边用negative_sample训练
+                # 先更新
+                negative_manager.step(scores, answers_id, case_ids)
+                # 后采样
+                negative_ids = negative_manager.get_negative_samples(case_ids)
             # print(negative_ids)
             # 下面计算一个batch内的loss
             for score, answers, negatives in zip(scores, answers_id, negative_ids):
                 # 每次循环计算一个（h, r, t)的loss，分为positive和negative两部分
                 positive_scores = torch.index_select(score, 0, torch.tensor(answers))
-                negative_scores = torch.index_select(-score, 0, torch.tensor(negatives))
+                positive_loss = torch.sum(-torch.log(torch.sigmoid(positive_scores)))
+                graph.positive_loss[i].append((steps, positive_loss.detach()))
+                if not args.not_NS:
+                    negative_scores = torch.index_select(-score, 0, torch.tensor(negatives))
+                    negative_loss = torch.sum(-torch.log(torch.sigmoid(negative_scores)))
+                    graph.negative_loss[i].append((steps, negative_loss.detach()))
+                    cur_loss.append(positive_loss + negative_loss)
                 # target_scores = torch.index_select(score, 0, torch.tensor(answers))
                 # print(positive_scores, sum(target_scores))
-                positive_loss = torch.sum(-torch.log(torch.sigmoid(positive_scores)))
-                negative_loss = torch.sum(-torch.log(torch.sigmoid(negative_scores)))
-
-                graph.positive_loss[i].append((steps, positive_loss.detach()))
-                graph.negative_loss[i].append((steps, negative_loss.detach()))
-
-                cur_loss.append(positive_loss + negative_loss)
+                else:
+                    cur_loss.append(positive_loss)
                 # logger.debug(cur_loss)
                 # loss.append(torch.sum(target_scores))
                 # loss.append(torch.sum(-torch.log(target_scores)))
@@ -256,13 +258,14 @@ def train(model, data_loader):
                 plt.legend()
                 plt.savefig(save_path + '/performance_EPOCH{}.png'.format(i))
                 plt.close()
-                _init_figure(title='positive_loss and negative_loss', x_label='Steps', y_label='Loss')
-                _x = [_[0] for _ in graph.positive_loss[i]]
-                plt.plot(_x, [_[1].tolist() for _ in graph.positive_loss[i]], label='positive')
-                plt.plot(_x, [_[1].tolist() for _ in graph.negative_loss[i]], label='negative')
-                plt.legend()
-                plt.savefig(save_path + '/positive_and_negative_loss{}.png'.format(i))
-                plt.close()
+                if not args.not_NS:
+                    _init_figure(title='positive_loss and negative_loss', x_label='Steps', y_label='Loss')
+                    _x = [_[0] for _ in graph.positive_loss[i]]
+                    plt.plot(_x, [_[1].tolist() for _ in graph.positive_loss[i]], label='positive')
+                    plt.plot(_x, [_[1].tolist() for _ in graph.negative_loss[i]], label='negative')
+                    plt.legend()
+                    plt.savefig(save_path + '/positive_and_negative_loss{}.png'.format(i))
+                    plt.close()
                 # _init_figure(title='attention_weights', x_label='question_tokens', y_label='weights')
                 # # [(batch_size, sequence_length), (batch_size, sequence_length)]
                 # target_data = [_[-1] for _ in model.relation_predictor.attention_scores[-1]]
