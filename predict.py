@@ -81,8 +81,10 @@ def query_graph(target):
 def predict(question):
     legal, question = preprocess_question(question)
     if not legal:
-        return False, None, None
+        return False, None
     head = re.match('(.*)\[(.*)\](.*)', question).groups()[1].strip(' ')
+    if head not in ent_dict.keys():
+        return False, None
     new_question = re.sub('\[.*\]', 'xxx', question)
     token_ids = tokenizer.encode(new_question, add_special_tokens=True)
     mask = [1] * len(token_ids)
@@ -95,10 +97,12 @@ def predict(question):
     head_id = [ent_dict[head]]
     predicts = model.predict([token_ids], [mask], [head_id])
     answers = []
+    answer_query = []
     for index in predicts[0][:3]:
         answers.append(reverse_dict[str(index.item())])
+        answer_query.append(query_graph(answers[-1]))
     query_results = query_graph(head)
-    return True, answers, query_results
+    return True, [answers, query_results, head, answer_query]
 
 
 def test():

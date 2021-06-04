@@ -1,0 +1,9 @@
+.list{
+    width: 700px !important;
+}
+.listItem{
+    margin-left: 10px;
+}
+.avatar{
+    background-color: green;
+}

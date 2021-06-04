@@ -1,24 +1,30 @@
 from flask import Flask, request
 from predict import predict as func
 import json
-from flask_cors import cross_origin
+from flask_cors import CORS
 
 app = Flask(__name__)
+CORS(app)
 
 
 @app.route('/predict', methods=['POST', 'GET'])
-@cross_origin(supports_credentials=True)
 def predict():
     res = {}
     question = str(request.args.get("question"))
     print(question)
-    status, answer, sub_graph = func(question)
+    status, answer_list = func(question)
     if not status:
         res['status'] = '500'
         res['data'] = 'illegal input'
     else:
+        [answer, sub_graph, head, answer_subgraph] = answer_list
         res['status'] = '200 OK'
-        res['data'] = {'answer': answer, 'sub_graph': sub_graph}
+        res['data'] = {
+            'answer': answer,
+            'sub_graph': sub_graph,
+            'head': head,
+            'answer_subgraph': answer_subgraph
+            }
     return json.dumps(res, ensure_ascii=False)
 
 
