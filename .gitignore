@@ -7,3 +7,4 @@ openke.tar
 cache/
 example.py
 NER_model/*
+demo/node_modules/*
