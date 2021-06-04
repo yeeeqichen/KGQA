@@ -3,7 +3,7 @@
 
 ![](https://img.shields.io/badge/language-Python-brightgreen) ![](https://img.shields.io/badge/language-JavaScript-brightgreen)  
 
-##项目目录结构： 
+## 项目目录结构： 
 1、train_KGE目录下为训练知识图谱嵌入模型的相关代码  
 2、KGQA_system目录下包含了问答系统的实现代码  
 3、demo目录下为本问答系统的展示demo，是一个基于react开发的网页
