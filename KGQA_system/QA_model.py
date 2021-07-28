@@ -38,6 +38,7 @@ class QuestionEmbeddingModule(torch.nn.Module):
         self.use_lstm = use_lstm
         self.bert_name = bert_name
         if self.use_lstm:
+            # todo: 这里的知识图谱实体数量需根据所使用的具体知识图谱进行调整，下同
             self.question_embed = torch.nn.Sequential(
                 torch.nn.Embedding(num_embeddings=50265, embedding_dim=256),
                 torch.nn.LSTM(input_size=256,
