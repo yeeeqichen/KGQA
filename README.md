@@ -5,11 +5,28 @@
 
 本次项目中设计并实现了一个基于知识图谱的问答系统，结合MetaQA知识图谱，用于解决电影领域的问答问题
 
+此项目为作者的本科毕业设计项目，完成于2021年5月，引用请注明出处
+
+## 数据集
+[数据集下载](https://github.com/yuyuz/MetaQA)
+
+数据集中包含：
+- 知识图谱
+- 问答数据
+
 MetaQA知识图谱中包含四万多个电影领域相关实体及18种关系  
 
-知识图谱中三元组及问答数据示例：  
+问答数据中有1-hop、2-hop、3-hop三种类型，本项目中使用 **1-hop** 问答数据
 
-此项目为作者的本科毕业设计项目，完成于2021年5月，引用请注明出处
+知识图谱中三元组及问答数据示例：
+- 三元组
+  ```angular2html
+  Kismet | directed_by | William Dieterle
+  ```
+- 问答
+  ```angular2html
+  what films are on [ginger rogers]   Top Hat|Kitty Foyle|The Barkleys of Broadway
+  ```
 
 ## 项目目录结构： 
 1、train_KGE目录下为训练知识图谱嵌入模型的相关代码，包含以下知识图谱嵌入方法：
@@ -41,7 +58,7 @@ python 相关依赖：
 
 命令行中执行：
 ```angular2html
-pip install -r requirement.txt
+pip install -r requirements.txt
 ```
 
 前端demo展示相关依赖(若不需要网页展示此部分可以跳过)：
@@ -122,10 +139,17 @@ python3 train.py --train_file **训练文件路径** --valid_file **验证文件
 ```shell
 python3 create_neo4j.py --data_path **知识图谱存放路径,内有entity2id.txt, relation2id.txt, train2id.txt**
 ```
+注意到，有别于训练数据，我们在实际的使用场景中输入的问题  **不会**  对头实体进行特殊标注：
+```angular2html
+what movies does [Jack Ma] act in?   <-->  what movies does Jack Ma act in?
+```
+因此在最终使用时，我们需要使用一个NER系统来检测出输入问题的头实体，NER系统可以使用现成的轮子，详见 [这里](https://github.com/kamalkraj/BERT-NER)
 
-执行KGQA_system/router.py，启动问答服务：
+使用手上的问答数据来构造出NER训练数据，用于检测出问题中的头实体
+
+最后，执行KGQA_system/router.py，启动问答服务：
 ```shell
-python3 router.py 参数请根据实际情况自行填写
+python3 router.py 参数请根据实际情况自行填写,其中--ner_model参数填写前一步训练好的NER模型路径
 ```
 
 启动前端网页服务：
@@ -134,8 +158,9 @@ cd demo/
 npm start
 ```
 网页展示效果：
-
-
+![](https://github.com/yeeeqichen/Pictures/blob/master/591627631284_.pic_hd.jpg?raw=true)
+![](https://github.com/yeeeqichen/Pictures/blob/master/601627631349_.pic_hd.jpg?raw=true)
+![](https://github.com/yeeeqichen/Pictures/blob/master/611627631366_.pic_hd.jpg?raw=true)
 
 
 
