@@ -14,6 +14,8 @@
 - 知识图谱
 - 问答数据
 
+后续代码中使用到的entity_dict 请自行根据数据集构建，其中每一行包含 entity 和 entity_id 用 '\t' 隔开
+
 MetaQA知识图谱中包含四万多个电影领域相关实体及18种关系  
 
 问答数据中有1-hop、2-hop、3-hop三种类型，本项目中使用 **1-hop** 问答数据
@@ -117,8 +119,15 @@ cd KGQA_system
 what movies does [Jack Ma] act in?  Alibaba|Taobao
 ```
 执行训练脚本，训练问答系统：
-```shell
-python3 train.py --train_file **训练文件路径** --valid_file **验证文件路径** --test_file **测试文件路径** --bert_name **使用的bert模型名称** --bert_path **bert模型存放路径** --relation_file **relation2id.txt文件路径** --KGE_method **使用的知识图谱嵌入方法**
+```bash
+python3 train.py \
+  --train_file **训练文件路径** \
+  --valid_file **验证文件路径** \
+  --test_file **测试文件路径** \
+  --bert_name **使用的bert模型名称** \
+  --bert_path **bert模型存放路径** \
+  --relation_file **relation2id.txt文件路径** \
+  --KGE_method **使用的知识图谱嵌入方法**
 ```
 其中使用上面的参数需要根据实际使用情况进行填写
 
@@ -136,8 +145,9 @@ python3 train.py --train_file **训练文件路径** --valid_file **验证文件
 ./bin/neo4j console
 ```
 随后执行KGQA_system 目录下的脚本将知识图谱存入图数据库当中:
-```shell
-python3 create_neo4j.py --data_path **知识图谱存放路径,内有entity2id.txt, relation2id.txt, train2id.txt**
+```bash
+python3 create_neo4j.py \
+  --data_path **知识图谱存放路径,内有entity2id.txt, relation2id.txt, train2id.txt**
 ```
 注意到，有别于训练数据，我们在实际的使用场景中输入的问题  **不会**  对头实体进行特殊标注：
 ```angular2html
@@ -149,7 +159,16 @@ what movies does [Jack Ma] act in?   <-->  what movies does Jack Ma act in?
 
 最后，执行KGQA_system/router.py，启动问答服务：
 ```shell
-python3 router.py 参数请根据实际情况自行填写,其中--ner_model参数填写前一步训练好的NER模型路径
+python3 router.py \
+  --ner_model **填写前一步训练好的NER模型路径** \
+  --bert_path **填写预训练bert文件夹路径,与下面的bert_name一起构成完成路径** \
+  --bert_name **填写使用的bert模型名称,例如bert-base-uncased** \
+  --name **填写neo4j数据库用户名** \
+  --password **填写neo4j数据库密码** \
+  --pretrained_model_path **填写预训练的问答模型路径** \
+  --dict_path **填写实体字典路径** \
+  --embed_model_path **填写预训练的知识图谱嵌入模型路径** \
+  --embed_method **填写知识图谱嵌入方法,与上面的预训练模型保持一致**
 ```
 
 启动前端网页服务：
