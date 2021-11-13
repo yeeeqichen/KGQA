@@ -24,6 +24,7 @@ parser.add_argument("--seq_length", type=int, default=20)
 parser.add_argument("--embed_model_path", type=str, default="checkpoint/rotatE.ckpt", help="预训练的知识图谱嵌入模型路径")
 parser.add_argument("--embed_method", type=str, default='rotatE')
 parser.add_argument("--ner_model", type=str, default='NER_model/out_base/', help="NER模型路径")
+parser.add_argument("--attn_method", type=str, default="mine", help="attn method for relation prediction model")
 
 args = parser.parse_args()
 
@@ -40,7 +41,7 @@ model = QuestionAnswerModel(
     use_dnn=True,
     bert_name=args.bert_name,
     bert_path=args.bert_path,
-    attention_method='self-attention',
+    attention_method=args.attn_method,
     n_clusters=8
 )
 model.to(model.device)
