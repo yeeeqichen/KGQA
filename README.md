@@ -11,8 +11,8 @@
 [数据集下载](https://github.com/yuyuz/MetaQA)
 
 数据集中包含：
-- 知识图谱
-- 问答数据
+- 知识图谱 (kg.txt)
+- 问答数据 (1-hop/vanilla)
 
 后续代码中使用到的entity_dict 请自行根据数据集构建，其中每一行包含 entity 和 entity_id 用 '\t' 隔开
 
